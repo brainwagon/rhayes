@@ -1,0 +1,17 @@
+##RenderMan RIB-Structure 1.1
+version 3.03
+Format 200 200 1
+Display "rotate.ppm" "file" "rgb"
+Projection "perspective" "fov" 45
+TransformBegin
+    Translate 0 0 4
+    WorldBegin
+        LightSource "distantlight" "intensity" 1 "from" [0 1 -1]
+        Surface "plastic"
+        Color [0.2 0.6 0.8]
+        # Rotated cylinder
+        Rotate 45 1 0 0
+        Rotate 30 0 1 0
+        Cylinder 0.5 -1 1 360
+    WorldEnd
+TransformEnd

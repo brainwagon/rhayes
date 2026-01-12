@@ -1,0 +1,29 @@
+##RenderMan RIB-Structure 1.1
+version 3.03
+Format 200 200 1
+Display "translate.ppm" "file" "rgb"
+Projection "perspective" "fov" 45
+TransformBegin
+    Translate 0 0 5
+    WorldBegin
+        LightSource "distantlight" "intensity" 1 "from" [0 1 -1]
+        Surface "plastic"
+        # Left sphere
+        AttributeBegin
+            Color [0.8 0.2 0.2]
+            Translate -1.2 0 0
+            Sphere 0.4 -0.4 0.4 360
+        AttributeEnd
+        # Center sphere
+        AttributeBegin
+            Color [0.2 0.8 0.2]
+            Sphere 0.4 -0.4 0.4 360
+        AttributeEnd
+        # Right sphere
+        AttributeBegin
+            Color [0.2 0.2 0.8]
+            Translate 1.2 0 0
+            Sphere 0.4 -0.4 0.4 360
+        AttributeEnd
+    WorldEnd
+TransformEnd

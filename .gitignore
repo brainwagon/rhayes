@@ -1,0 +1,14 @@
+obj/
+lib/
+bin/
+*.o
+*.a
+*.so
+*.exe
+*.ppm
+output.ppm
+.DS_Store
+
+# Test output (but not reference images)
+tests/output/
+!tests/reference/**/*.ppm

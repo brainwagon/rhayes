@@ -1,0 +1,28 @@
+##RenderMan RIB-Structure 1.1
+version 3.03
+Format 200 200 1
+Display "distantlight.ppm" "file" "rgb"
+Projection "perspective" "fov" 45
+TransformBegin
+    Translate 0 0 4
+    Rotate -20 1 0 0
+    WorldBegin
+        LightSource "distantlight" "intensity" 1 "from" [1 1 -1]
+        Surface "plastic"
+        # Multiple spheres to show lighting direction
+        AttributeBegin
+            Color [0.8 0.8 0.8]
+            Translate -1 0 0
+            Sphere 0.5 -0.5 0.5 360
+        AttributeEnd
+        AttributeBegin
+            Color [0.8 0.8 0.8]
+            Sphere 0.5 -0.5 0.5 360
+        AttributeEnd
+        AttributeBegin
+            Color [0.8 0.8 0.8]
+            Translate 1 0 0
+            Sphere 0.5 -0.5 0.5 360
+        AttributeEnd
+    WorldEnd
+TransformEnd

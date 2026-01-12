@@ -1,0 +1,14 @@
+##RenderMan RIB-Structure 1.1
+version 3.03
+Format 200 200 1
+Display "metal.ppm" "file" "rgb"
+Projection "perspective" "fov" 45
+TransformBegin
+    Translate 0 0 3
+    WorldBegin
+        LightSource "distantlight" "intensity" 1 "from" [0 1 -1]
+        Color [0.8 0.7 0.2]
+        Surface "metal"
+        Sphere 1 -1 1 360
+    WorldEnd
+TransformEnd

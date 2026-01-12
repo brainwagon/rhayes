@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xxd:*)",
+      "Bash(./rhayes)",
+      "Bash(make clean:*)",
+      "Bash(make)",
+      "Bash(convert:*)",
+      "Bash(wc:*)",
+      "Bash(echo:*)",
+      "WebSearch",
+      "WebFetch(domain:www.fileformat.info)",
+      "WebFetch(domain:renderman.pixar.com)",
+      "WebFetch(domain:paulbourke.net)",
+      "WebFetch(domain:groups.csail.mit.edu)",
+      "WebFetch(domain:hradec.com)",
+      "Bash(make:*)",
+      "Bash(./bin/catrib:*)",
+      "Bash(./bin/render:*)",
+      "Bash(chmod:*)"
+    ]
+  }
+}

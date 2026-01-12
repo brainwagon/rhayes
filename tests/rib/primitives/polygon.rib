@@ -1,0 +1,14 @@
+##RenderMan RIB-Structure 1.1
+version 3.03
+Format 200 200 1
+Display "polygon.ppm" "file" "rgb"
+Projection "perspective" "fov" 45
+TransformBegin
+    Translate 0 0 3
+    WorldBegin
+        LightSource "distantlight" "intensity" 1 "from" [0 1 -1]
+        Color [0.8 0.6 0.2]
+        Surface "matte"
+        Polygon "P" [-1 -1 0  1 -1 0  1 1 0  -1 1 0]
+    WorldEnd
+TransformEnd
