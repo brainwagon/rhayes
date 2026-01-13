@@ -16,7 +16,7 @@ This is my (IP) based attempt.
 
 A few caveats:
 
-- There is no code in renderer which derives from any source which is not public.  The RenderMan Interface was publicly
+- There is no code in renderer which is copied from any source which is not public.  The RenderMan Interface was publicly
 published precisely so people could write compliant tools and implementation.   The header files used are derived from
 that document.  I have no access to any proprietary code from Pixar Animation Studios, and this code uses no such code.
 - The algorithms used are documented in [the 1987 Siggraph paper by Cook, Carpenter and Catmull](https://graphics.pixar.com/library/Reyes/), and form the basis of the AI implementation (and largely my own, and probably everyone's) 
@@ -27,6 +27,41 @@ understanding of the Reyes algorithm.
 (judging whether an AI can succeed in implementing to a rather complex specification is really the point of this 
 project) no guarantees, warranties or the like as to its compatibility or use for any particular purpose is implied
 or given.
+
+## AI Assistants
+
+As I mentioned before: this code is was written largely by [Claude Code](https://code.claude.com/docs/en/overview)
+with some minor bits perhaps written by [Gemini-CLI](https://geminicli.com/docs/).  I am currently using the $20
+a month "Pro" option of Claude Code, and the $20 per month option of Gemini CLI as well.  My early experience
+is that Claude is a much better and much less frustrating experience, but the rather spartan limits of the $20 
+per month plan for Claude mean that I'm only getting one or two hours per day where I can use it, often with enforced
+rate limits kicking in after just thirty minutes at the keyboard.   Nevertheless, it is clear to me that Claude 
+does a much better job of creating code, and has a much decreased tendency to get lost in loops or stray off into
+irrelevant fixes which have as great a likelihood to break as fix the code.
+
+I have written other interesting bits of code using Gemini 
+(see the projects listed/hosted [on mvandewettering](https://mvandewettering.com/pages/) 
+for some publicly shared examples, mostly in the realm of single page HTML applications.
+
+## AI is evil!  You're doing evil!
+
+Probably.  I've no doubt that the appearance of AI in the world has been and will continue to be enormously disruptive
+to the lives of software engineers and those in the film and media fields.  I can say this with some certainty 
+based upon my personal experience in those industries, and my premature departure into retirement somewhat 
+earlier than I planned.  Part of this experiment was to determine the degree to which my experience in guiding 
+Claude is important, even though I am largely freed from the mechanics of coding individual lines of C, and whether
+it represents a true boost in my productivity, and whether code written by such a process can be considered valuable.
+
+I've some preliminary conclusions (now just a few days into the project) but wish to continue a bit longer before
+I make them public.
+
+There is a considerable ethical question of course which goes beyond the practical questions.  Coding AIs are only
+enabled because they loot the considerable corpus of work that is available on the Internet, a lot of which is 
+covered by licenses which may prohibit this kind of reuse as training data (either implicitly or explicitly).  
+The degree to which this code may be considered an illegal derivative of some other (unknown to me) work is a 
+question that has not yet been resolved legally, and which people can reasonably argue about ethically.  I'm 
+happy to engage in such conversations with thoughtful individuals.  Reach out to [me via email](mailto:mvandewettering.com) if you have something you'd like me to consider in this topic.  Respectful conversations appreciated.
+
 
 ## The name "Rhayes"
 
