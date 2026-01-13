@@ -1,5 +1,7 @@
 # Rhayes: REYES-style Software Renderer in C
 
+![Image created by work in progress, January 13, 2026](images/20260113.png)
+
 ## What is this all about?
 
 I'm Mark VandeWettering, a former Pixar Software Engineer and Technical director.  Back in 1991, I was originally
