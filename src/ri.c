@@ -18,16 +18,17 @@
 typedef struct {
     RhMat4 transform; // Current Transformation Matrix (Object -> World/Camera)
     RhColor color;
-    
+
     // Basis
     RhMat4 u_basis;
     int u_step;
     RhMat4 v_basis;
     int v_step;
-    
+
     // Shading
     RhShaderFunc current_surface_shader;
     void* current_shader_params;
+    float shading_rate;  // Controls splitting granularity (default 1.0)
 } RiAttributeState;
 
 // Standard Basis Matrices
@@ -72,12 +73,36 @@ typedef struct {
     RhColor color;
     RhShaderFunc shader;
     void* shader_params;
+    float shading_rate;  // Captured from attribute state
+    bool processed;      // Has this primitive been split/diced/shaded?
 } RhRenderItem;
+
+// --- Micropolygon Types for Efficient Bucket Rendering ---
+
+typedef enum {
+    RH_SHADE_VERTEX,   // Per-vertex shading, interpolate 4 colors
+    RH_SHADE_CENTER    // Single flat color per micropolygon
+} RhShadingMode;
+
+typedef struct {
+    RhVec3 v[4];       // Screen-space vertices (x=pixel, y=pixel, z=depth)
+    RhColor c[4];      // Per-vertex colors (for interpolation mode)
+    RhColor center;    // Center color (for flat shading mode)
+    int min_x, min_y;  // Screen-space bounding box
+    int max_x, max_y;
+} RhMicropolygon;
+
+typedef struct {
+    RhMicropolygon* data;
+    int count;
+    int capacity;
+} RhMicropolygonList;
 
 typedef struct {
     RhRenderItem** items;
-    int count;
-    int capacity;
+    int item_count;
+    int item_capacity;
+    RhMicropolygonList queued;  // Micropolygons forwarded from earlier buckets
 } RhBucket;
 
 // Internal Light Structure
@@ -95,6 +120,13 @@ typedef struct {
 } RhLight;
 
 #define MAX_LIGHTS 8
+
+// Grid size constants for adaptive splitting/dicing
+#define MAX_GRID_SIZE 16
+#define MAX_GRID_AREA (MAX_GRID_SIZE * MAX_GRID_SIZE)  // 256 pixels
+#define MIN_GRID_SIZE 2
+#define MAX_SPLIT_DEPTH 12  // Safety limit to prevent infinite recursion
+#define MIN_SPLIT_DEPTH 3   // Minimum splits before considering area
 
 typedef struct {
     RhPrimitive prim;
@@ -154,12 +186,34 @@ typedef struct {
     // Lights
     RhLight lights[MAX_LIGHTS];
     int num_lights;
+
+    // Grid counter for diagnostic shaders (monotonically increasing ID)
+    int grid_counter;
+
+    // Shading mode for micropolygon rendering
+    RhShadingMode shading_mode;
+
+    // Rendering statistics
+    struct {
+        int primitives_by_type[9];  // Indexed by RhPrimitiveType
+        int grids_by_size[17];      // Index 0 unused, 1-16 for grid sizes
+        int total_grids;
+        int total_micropolygons;
+        int primitives_processed;   // Unique primitives (not per-bucket)
+    } stats;
+
+    // Statistics output options (set via RiOption "statistics")
+    struct {
+        int endofframe;             // 0=off, non-zero=on (default 0)
+        char filename[256];         // Text output file (empty = stderr)
+        char jsonfilename[256];     // JSON output file (empty = none)
+    } stats_options;
 } RiContextData;
 
 static RiContextData* g_ctx = NULL;
 
 // Forward declarations of internal helpers
-static void ri_render_recursive(RhRenderItem* item, int depth);
+static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropolygonList* out_mpolys, RhShadingMode mode);
 static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, const RhColor* color);
 static void ri_add_geometry(RhPrimitive* p);
 
@@ -179,7 +233,9 @@ static RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* t
     item->color = *color;
     item->shader = curr()->current_surface_shader;
     item->shader_params = curr()->current_shader_params;
-    
+    item->shading_rate = curr()->shading_rate;
+    item->processed = false;
+
     // Add to global list for cleanup
     if (g_ctx->all_items_count >= g_ctx->all_items_capacity) {
         g_ctx->all_items_capacity = g_ctx->all_items_capacity == 0 ? 16 : g_ctx->all_items_capacity * 2;
@@ -197,10 +253,263 @@ static void ri_render_item_destroy(RhRenderItem* item) {
     }
 }
 
+// --- Micropolygon List Helpers ---
+
+static void ri_mpoly_list_init(RhMicropolygonList* list) {
+    list->data = NULL;
+    list->count = 0;
+    list->capacity = 0;
+}
+
+static void ri_mpoly_list_push(RhMicropolygonList* list, const RhMicropolygon* mpoly) {
+    if (list->count >= list->capacity) {
+        list->capacity = list->capacity == 0 ? 64 : list->capacity * 2;
+        list->data = (RhMicropolygon*)realloc(list->data, list->capacity * sizeof(RhMicropolygon));
+    }
+    list->data[list->count++] = *mpoly;
+}
+
+static void ri_mpoly_list_clear(RhMicropolygonList* list) {
+    list->count = 0;
+    // Keep capacity and data allocated for reuse
+}
+
+static void ri_mpoly_list_free(RhMicropolygonList* list) {
+    free(list->data);
+    list->data = NULL;
+    list->count = 0;
+    list->capacity = 0;
+}
+
+// Convert a shaded grid to micropolygons
+// Grid has width*height vertices = (width-1)*(height-1) micropolygon quads
+static void ri_grid_to_mpolys(const RhMicroGrid* grid, RhMicropolygonList* out_list, RhShadingMode mode) {
+    int w = grid->width;
+    int h = grid->height;
+
+    // Track micropolygon statistics
+    int mpoly_count = (w - 1) * (h - 1);
+    g_ctx->stats.total_micropolygons += mpoly_count;
+
+    for (int j = 0; j < h - 1; j++) {
+        for (int i = 0; i < w - 1; i++) {
+            // Vertex indices for quad corners
+            int i00 = j * w + i;           // top-left
+            int i10 = j * w + (i + 1);     // top-right
+            int i01 = (j + 1) * w + i;     // bottom-left
+            int i11 = (j + 1) * w + (i + 1); // bottom-right
+
+            RhMicropolygon mpoly;
+
+            // Copy screen-space positions (v[0]=TL, v[1]=TR, v[2]=BR, v[3]=BL)
+            mpoly.v[0] = grid->positions[i00];
+            mpoly.v[1] = grid->positions[i10];
+            mpoly.v[2] = grid->positions[i11];
+            mpoly.v[3] = grid->positions[i01];
+
+            // Copy per-vertex colors
+            mpoly.c[0] = grid->colors[i00];
+            mpoly.c[1] = grid->colors[i10];
+            mpoly.c[2] = grid->colors[i11];
+            mpoly.c[3] = grid->colors[i01];
+
+            // Compute center color (average of 4 corners)
+            mpoly.center.r = (mpoly.c[0].r + mpoly.c[1].r + mpoly.c[2].r + mpoly.c[3].r) * 0.25f;
+            mpoly.center.g = (mpoly.c[0].g + mpoly.c[1].g + mpoly.c[2].g + mpoly.c[3].g) * 0.25f;
+            mpoly.center.b = (mpoly.c[0].b + mpoly.c[1].b + mpoly.c[2].b + mpoly.c[3].b) * 0.25f;
+
+            // Compute screen-space bounding box
+            float min_x = mpoly.v[0].x;
+            float max_x = mpoly.v[0].x;
+            float min_y = mpoly.v[0].y;
+            float max_y = mpoly.v[0].y;
+
+            for (int k = 1; k < 4; k++) {
+                if (mpoly.v[k].x < min_x) min_x = mpoly.v[k].x;
+                if (mpoly.v[k].x > max_x) max_x = mpoly.v[k].x;
+                if (mpoly.v[k].y < min_y) min_y = mpoly.v[k].y;
+                if (mpoly.v[k].y > max_y) max_y = mpoly.v[k].y;
+            }
+
+            // Store as integer bounds (floor min, ceil max for conservative coverage)
+            mpoly.min_x = (int)floorf(min_x);
+            mpoly.min_y = (int)floorf(min_y);
+            mpoly.max_x = (int)ceilf(max_x);
+            mpoly.max_y = (int)ceilf(max_y);
+
+            ri_mpoly_list_push(out_list, &mpoly);
+
+            (void)mode; // Mode affects sampling, not conversion
+        }
+    }
+}
+
+// Edge function for rasterization - returns positive if (px,py) is to the right of edge (v0->v1)
+static inline float ri_edge_function(RhVec3 v0, RhVec3 v1, float px, float py) {
+    return (px - v0.x) * (v1.y - v0.y) - (py - v0.y) * (v1.x - v0.x);
+}
+
+// Rasterize a single micropolygon within the given clip bounds
+// mpoly vertex layout: v[0]=TL, v[1]=TR, v[2]=BR, v[3]=BL
+// Triangles: T1(v0, v1, v3) and T2(v1, v2, v3)
+static void ri_sample_mpoly(
+    RhRasterizer* r,
+    const RhMicropolygon* mpoly,
+    int clip_min_x, int clip_min_y,
+    int clip_max_x, int clip_max_y,
+    RhShadingMode mode
+) {
+    // Compute clipped bounding box
+    int x0 = rh_max(mpoly->min_x, clip_min_x);
+    int y0 = rh_max(mpoly->min_y, clip_min_y);
+    int x1 = rh_min(mpoly->max_x, clip_max_x);
+    int y1 = rh_min(mpoly->max_y, clip_max_y);
+
+    // Early out if completely clipped
+    if (x0 > x1 || y0 > y1) return;
+
+    // Get vertex references
+    RhVec3 v0 = mpoly->v[0]; // TL
+    RhVec3 v1 = mpoly->v[1]; // TR
+    RhVec3 v2 = mpoly->v[2]; // BR
+    RhVec3 v3 = mpoly->v[3]; // BL
+
+    // Compute triangle areas
+    float area1 = ri_edge_function(v0, v1, v3.x, v3.y); // Triangle 1: v0, v1, v3
+    float area2 = ri_edge_function(v1, v2, v3.x, v3.y); // Triangle 2: v1, v2, v3
+
+    for (int y = y0; y <= y1; y++) {
+        for (int x = x0; x <= x1; x++) {
+            float px = x + 0.5f;
+            float py = y + 0.5f;
+
+            // --- Triangle 1 (v0, v1, v3) ---
+            bool drawn = false;
+            if (fabsf(area1) > 1e-6f) {
+                float w0 = ri_edge_function(v1, v3, px, py);
+                float w1 = ri_edge_function(v3, v0, px, py);
+                float w2 = ri_edge_function(v0, v1, px, py);
+
+                bool inside = (area1 > 0) ? (w0 >= 0 && w1 >= 0 && w2 >= 0)
+                                          : (w0 <= 0 && w1 <= 0 && w2 <= 0);
+                if (inside) {
+                    float invArea = 1.0f / area1;
+                    w0 *= invArea;
+                    w1 *= invArea;
+                    w2 *= invArea;
+
+                    float z = w0 * v0.z + w1 * v1.z + w2 * v3.z;
+
+                    int idx = y * r->width + x;
+                    if (z < r->zbuffer[idx]) {
+                        r->zbuffer[idx] = z;
+
+                        RhColor final_color;
+                        if (mode == RH_SHADE_CENTER) {
+                            final_color = mpoly->center;
+                        } else {
+                            // Per-vertex interpolation
+                            final_color.r = w0 * mpoly->c[0].r + w1 * mpoly->c[1].r + w2 * mpoly->c[3].r;
+                            final_color.g = w0 * mpoly->c[0].g + w1 * mpoly->c[1].g + w2 * mpoly->c[3].g;
+                            final_color.b = w0 * mpoly->c[0].b + w1 * mpoly->c[1].b + w2 * mpoly->c[3].b;
+                        }
+
+                        rh_image_set_pixel(r->image, x, y, final_color);
+                        drawn = true;
+                    }
+                }
+            }
+
+            // --- Triangle 2 (v1, v2, v3) ---
+            if (!drawn && fabsf(area2) > 1e-6f) {
+                float u0 = ri_edge_function(v2, v3, px, py);
+                float u1 = ri_edge_function(v3, v1, px, py);
+                float u2 = ri_edge_function(v1, v2, px, py);
+
+                bool inside2 = (area2 > 0) ? (u0 >= 0 && u1 >= 0 && u2 >= 0)
+                                           : (u0 <= 0 && u1 <= 0 && u2 <= 0);
+                if (inside2) {
+                    float invArea = 1.0f / area2;
+                    u0 *= invArea;
+                    u1 *= invArea;
+                    u2 *= invArea;
+
+                    float z = u0 * v1.z + u1 * v2.z + u2 * v3.z;
+
+                    int idx = y * r->width + x;
+                    if (z < r->zbuffer[idx]) {
+                        r->zbuffer[idx] = z;
+
+                        RhColor final_color;
+                        if (mode == RH_SHADE_CENTER) {
+                            final_color = mpoly->center;
+                        } else {
+                            // Per-vertex interpolation
+                            final_color.r = u0 * mpoly->c[1].r + u1 * mpoly->c[2].r + u2 * mpoly->c[3].r;
+                            final_color.g = u0 * mpoly->c[1].g + u1 * mpoly->c[2].g + u2 * mpoly->c[3].g;
+                            final_color.b = u0 * mpoly->c[1].b + u1 * mpoly->c[2].b + u2 * mpoly->c[3].b;
+                        }
+
+                        rh_image_set_pixel(r->image, x, y, final_color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+static inline int ri_clamp_int(int val, int min_val, int max_val) {
+    if (val < min_val) return min_val;
+    if (val > max_val) return max_val;
+    return val;
+}
+
+// Compute screen-space bounding box area for a primitive
+// Samples actual surface points within the current parametric domain
+static float ri_compute_screen_area(const RhPrimitive* p, const RhMat4* mvp) {
+    float min_x = 1e30f, max_x = -1e30f;
+    float min_y = 1e30f, max_y = -1e30f;
+
+    // Sample 9 points on the surface (3x3 grid within parametric domain)
+    for (int j = 0; j <= 2; j++) {
+        float v = p->v_min + (p->v_max - p->v_min) * (j / 2.0f);
+        for (int i = 0; i <= 2; i++) {
+            float u = p->u_min + (p->u_max - p->u_min) * (i / 2.0f);
+
+            // Evaluate surface point at (u,v)
+            RhVec3 pos_obj = rh_prim_eval_point(p, u, v);
+
+            // Project to screen space
+            RhVec3 p_ndc = rh_mat4_mul_point(*mvp, pos_obj);
+            float rx = (p_ndc.x + 1.0f) * 0.5f * g_ctx->ss_xres;
+            float ry = (1.0f - (p_ndc.y + 1.0f) * 0.5f) * g_ctx->ss_yres;
+
+            if (rx < min_x) min_x = rx;
+            if (rx > max_x) max_x = rx;
+            if (ry < min_y) min_y = ry;
+            if (ry > max_y) max_y = ry;
+        }
+    }
+
+    float width = max_x - min_x;
+    float height = max_y - min_y;
+
+    // Handle degenerate cases (behind camera, etc.)
+    if (width < 0.0f) width = 0.0f;
+    if (height < 0.0f) height = 0.0f;
+
+    return width * height;
+}
+
 static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, const RhColor* color) {
     if (!g_ctx || !g_ctx->world_active) return;
 
     RhRenderItem* item = ri_render_item_create(p, transform, color);
+
+    // Track primitive statistics
+    if (p->type >= 0 && p->type < 9) {
+        g_ctx->stats.primitives_by_type[p->type]++;
+    }
 
     // Calculate Screen Bounds
     RhBounds3 obj_bounds = rh_prim_bound(p);
@@ -235,19 +544,19 @@ static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, con
     int b_max_y = (int)floorf(max_y / g_ctx->bucket_size);
 
     // Clamp to bucket grid
-    if (b_min_x < 0) b_min_x = 0; 
+    if (b_min_x < 0) b_min_x = 0;
     if (b_max_x >= g_ctx->num_buckets_x) b_max_x = g_ctx->num_buckets_x - 1;
-    if (b_min_y < 0) b_min_y = 0; 
+    if (b_min_y < 0) b_min_y = 0;
     if (b_max_y >= g_ctx->num_buckets_y) b_max_y = g_ctx->num_buckets_y - 1;
 
     for (int y = b_min_y; y <= b_max_y; y++) {
         for (int x = b_min_x; x <= b_max_x; x++) {
             RhBucket* b = &g_ctx->buckets[y * g_ctx->num_buckets_x + x];
-            if (b->count >= b->capacity) {
-                b->capacity = b->capacity == 0 ? 4 : b->capacity * 2;
-                b->items = (RhRenderItem**)realloc(b->items, b->capacity * sizeof(RhRenderItem*));
+            if (b->item_count >= b->item_capacity) {
+                b->item_capacity = b->item_capacity == 0 ? 4 : b->item_capacity * 2;
+                b->items = (RhRenderItem**)realloc(b->items, b->item_capacity * sizeof(RhRenderItem*));
             }
-            b->items[b->count++] = item;
+            b->items[b->item_count++] = item;
         }
     }
 }
@@ -320,12 +629,14 @@ void RiBegin(RtToken name) {
     // RISpec says implementation dependent default.
     g_ctx->stack[0].current_surface_shader = rh_shader_surface_plastic; // Let's use plastic
     g_ctx->stack[0].current_shader_params = NULL; // Defaults
-    
+    g_ctx->stack[0].shading_rate = 1.0f; // Default ShadingRate
+
     // Default Projection (Perspective)
     g_ctx->projection = rh_mat4_identity();
 
     g_ctx->num_lights = 0;
     g_ctx->bucket_size = 32;
+    g_ctx->shading_mode = RH_SHADE_VERTEX;  // Default: per-vertex shading with interpolation
 
     // Default Supersampling (1x1 = no supersampling)
     g_ctx->pixel_samples_x = 1;
@@ -372,6 +683,42 @@ void RiContext(RtPointer ctx) {
 }
 
 // --- 2. Options ---
+
+void RiOption(RtToken name, ...) {
+    if (!g_ctx) return;
+
+    va_list ap;
+    va_start(ap, name);
+
+    if (strcmp(name, "statistics") == 0) {
+        // Parse statistics options
+        RtToken param;
+        while ((param = va_arg(ap, RtToken)) != RI_NULL) {
+            if (strcmp(param, "endofframe") == 0) {
+                RtInt* val = va_arg(ap, RtInt*);
+                g_ctx->stats_options.endofframe = *val;
+            } else if (strcmp(param, "filename") == 0) {
+                RtToken filename = va_arg(ap, RtToken);
+                if (filename) {
+                    strncpy(g_ctx->stats_options.filename, filename, 255);
+                    g_ctx->stats_options.filename[255] = '\0';
+                } else {
+                    g_ctx->stats_options.filename[0] = '\0';
+                }
+            } else if (strcmp(param, "jsonfilename") == 0) {
+                RtToken filename = va_arg(ap, RtToken);
+                if (filename) {
+                    strncpy(g_ctx->stats_options.jsonfilename, filename, 255);
+                    g_ctx->stats_options.jsonfilename[255] = '\0';
+                } else {
+                    g_ctx->stats_options.jsonfilename[0] = '\0';
+                }
+            }
+        }
+    }
+
+    va_end(ap);
+}
 
 void RiFormat(RtInt xresolution, RtInt yresolution, RtFloat pixelaspectratio) {
     if (!g_ctx) return;
@@ -562,6 +909,11 @@ void RiOpacity(RtColor color) {
     (void)color;
 }
 
+void RiShadingRate(RtFloat size) {
+    if (!g_ctx) return;
+    curr()->shading_rate = size;
+}
+
 // --- 6. Scene Structure ---
 
 void RiWorldBegin(void) {
@@ -589,6 +941,7 @@ void RiWorldBegin(void) {
     g_ctx->buckets = (RhBucket*)calloc(count, sizeof(RhBucket));
 
     g_ctx->all_items_count = 0;
+    g_ctx->grid_counter = 0;  // Reset grid counter for diagnostic shaders
 
     // Reset CTM to Identity for World block
     RiAttributeBegin(); // Push a new state for World
@@ -601,23 +954,77 @@ void RiWorldEnd(void) {
     int ss_xres = g_ctx->xres * g_ctx->pixel_samples_x;
     int ss_yres = g_ctx->yres * g_ctx->pixel_samples_y;
 
-    // Render Buckets
+    // Render Buckets - Efficient algorithm: process each primitive only once
+    RhShadingMode mode = g_ctx->shading_mode;
+
     for (int y = 0; y < g_ctx->num_buckets_y; y++) {
         for (int x = 0; x < g_ctx->num_buckets_x; x++) {
             RhBucket* b = &g_ctx->buckets[y * g_ctx->num_buckets_x + x];
-            if (b->count == 0) continue;
 
-            // Set Rasterizer Clip (using supersampled resolution)
-            g_ctx->raster->clip_min_x = x * g_ctx->bucket_size;
-            g_ctx->raster->clip_max_x = rh_min((x + 1) * g_ctx->bucket_size - 1, ss_xres - 1);
-            g_ctx->raster->clip_min_y = y * g_ctx->bucket_size;
-            g_ctx->raster->clip_max_y = rh_min((y + 1) * g_ctx->bucket_size - 1, ss_yres - 1);
+            // Compute clip bounds for this bucket
+            int clip_min_x = x * g_ctx->bucket_size;
+            int clip_max_x = rh_min((x + 1) * g_ctx->bucket_size - 1, ss_xres - 1);
+            int clip_min_y = y * g_ctx->bucket_size;
+            int clip_max_y = rh_min((y + 1) * g_ctx->bucket_size - 1, ss_yres - 1);
 
-            for (int i = 0; i < b->count; i++) {
-                ri_render_recursive(b->items[i], 0);
+            // Phase 1: Sample queued micropolygons from earlier buckets
+            for (int qi = 0; qi < b->queued.count; qi++) {
+                ri_sample_mpoly(g_ctx->raster, &b->queued.data[qi],
+                               clip_min_x, clip_min_y, clip_max_x, clip_max_y, mode);
+            }
+            ri_mpoly_list_clear(&b->queued);
+
+            // Phase 2: Process unprocessed primitives
+            for (int i = 0; i < b->item_count; i++) {
+                RhRenderItem* item = b->items[i];
+                if (item->processed) continue;  // Already processed by earlier bucket
+                item->processed = true;
+                g_ctx->stats.primitives_processed++;
+
+                // Generate all micropolygons for this primitive (done once)
+                RhMicropolygonList mpolys;
+                ri_mpoly_list_init(&mpolys);
+                ri_process_item_recursive(item, 0, &mpolys, mode);
+
+                // Distribute micropolygons to buckets
+                for (int mi = 0; mi < mpolys.count; mi++) {
+                    RhMicropolygon* mpoly = &mpolys.data[mi];
+
+                    // Compute which buckets this micropolygon overlaps
+                    int bx_min = mpoly->min_x / g_ctx->bucket_size;
+                    int bx_max = mpoly->max_x / g_ctx->bucket_size;
+                    int by_min = mpoly->min_y / g_ctx->bucket_size;
+                    int by_max = mpoly->max_y / g_ctx->bucket_size;
+
+                    // Clamp to valid bucket range
+                    bx_min = ri_clamp_int(bx_min, 0, g_ctx->num_buckets_x - 1);
+                    bx_max = ri_clamp_int(bx_max, 0, g_ctx->num_buckets_x - 1);
+                    by_min = ri_clamp_int(by_min, 0, g_ctx->num_buckets_y - 1);
+                    by_max = ri_clamp_int(by_max, 0, g_ctx->num_buckets_y - 1);
+
+                    for (int by = by_min; by <= by_max; by++) {
+                        for (int bx = bx_min; bx <= bx_max; bx++) {
+                            if (by == y && bx == x) {
+                                // Current bucket: sample immediately
+                                ri_sample_mpoly(g_ctx->raster, mpoly,
+                                               clip_min_x, clip_min_y, clip_max_x, clip_max_y, mode);
+                            } else if (by > y || (by == y && bx > x)) {
+                                // Later bucket: queue for later
+                                RhBucket* later = &g_ctx->buckets[by * g_ctx->num_buckets_x + bx];
+                                ri_mpoly_list_push(&later->queued, mpoly);
+                            }
+                            // Earlier bucket: already rendered, skip
+                        }
+                    }
+                }
+
+                ri_mpoly_list_free(&mpolys);
             }
 
+            // Cleanup bucket item list
             free(b->items);
+            b->items = NULL;
+            ri_mpoly_list_free(&b->queued);
         }
     }
     free(g_ctx->buckets);
@@ -682,6 +1089,80 @@ void RiWorldEnd(void) {
     // Save the image
     if (g_ctx->raster && g_ctx->raster->image) {
         rh_image_save_ppm(g_ctx->raster->image, g_ctx->display_name);
+    }
+
+    // Output rendering statistics if enabled via Option "statistics" "endofframe"
+    if (g_ctx->stats_options.endofframe) {
+        const char* prim_names[] = {
+            "Sphere", "Cylinder", "Cone", "Paraboloid", "Polygon",
+            "Patch (bicubic)", "Disk", "Torus", "Hyperboloid"
+        };
+        int total_prims = 0;
+        for (int i = 0; i < 9; i++) {
+            total_prims += g_ctx->stats.primitives_by_type[i];
+        }
+
+        // Text output (to file or stderr)
+        FILE* text_out = stderr;
+        if (g_ctx->stats_options.filename[0] != '\0') {
+            text_out = fopen(g_ctx->stats_options.filename, "w");
+            if (!text_out) text_out = stderr;
+        }
+
+        fprintf(text_out, "\n=== Rendering Statistics ===\n");
+        fprintf(text_out, "Primitives by type:\n");
+        for (int i = 0; i < 9; i++) {
+            if (g_ctx->stats.primitives_by_type[i] > 0) {
+                fprintf(text_out, "  %-16s: %d\n", prim_names[i], g_ctx->stats.primitives_by_type[i]);
+            }
+        }
+        fprintf(text_out, "  %-16s: %d\n", "Total", total_prims);
+        fprintf(text_out, "Primitives processed (unique): %d\n", g_ctx->stats.primitives_processed);
+        fprintf(text_out, "\nGrids by size:\n");
+        for (int i = 1; i <= 16; i++) {
+            if (g_ctx->stats.grids_by_size[i] > 0) {
+                fprintf(text_out, "  %2dx%-2d: %d\n", i, i, g_ctx->stats.grids_by_size[i]);
+            }
+        }
+        fprintf(text_out, "Total grids: %d\n", g_ctx->stats.total_grids);
+        fprintf(text_out, "Total micropolygons: %d\n", g_ctx->stats.total_micropolygons);
+        fprintf(text_out, "============================\n\n");
+
+        if (text_out != stderr) fclose(text_out);
+
+        // JSON output if jsonfilename specified
+        if (g_ctx->stats_options.jsonfilename[0] != '\0') {
+            FILE* json_out = fopen(g_ctx->stats_options.jsonfilename, "w");
+            if (json_out) {
+                fprintf(json_out, "{\n");
+                fprintf(json_out, "  \"primitives\": {\n");
+                int first = 1;
+                for (int i = 0; i < 9; i++) {
+                    if (g_ctx->stats.primitives_by_type[i] > 0) {
+                        if (!first) fprintf(json_out, ",\n");
+                        fprintf(json_out, "    \"%s\": %d", prim_names[i], g_ctx->stats.primitives_by_type[i]);
+                        first = 0;
+                    }
+                }
+                fprintf(json_out, "\n  },\n");
+                fprintf(json_out, "  \"primitives_total\": %d,\n", total_prims);
+                fprintf(json_out, "  \"primitives_processed\": %d,\n", g_ctx->stats.primitives_processed);
+                fprintf(json_out, "  \"grids\": {\n");
+                first = 1;
+                for (int i = 1; i <= 16; i++) {
+                    if (g_ctx->stats.grids_by_size[i] > 0) {
+                        if (!first) fprintf(json_out, ",\n");
+                        fprintf(json_out, "    \"%dx%d\": %d", i, i, g_ctx->stats.grids_by_size[i]);
+                        first = 0;
+                    }
+                }
+                fprintf(json_out, "\n  },\n");
+                fprintf(json_out, "  \"grids_total\": %d,\n", g_ctx->stats.total_grids);
+                fprintf(json_out, "  \"micropolygons_total\": %d\n", g_ctx->stats.total_micropolygons);
+                fprintf(json_out, "}\n");
+                fclose(json_out);
+            }
+        }
     }
 
     // Cleanup items
@@ -803,45 +1284,70 @@ void RiObjectInstance(RtObjectHandle handle) {
 
 // --- 7. Primitives ---
 
-// Copied and adapted from main.c logic
-static void ri_render_recursive(RhRenderItem* item, int depth) {
+// Process primitive and output micropolygons (efficient bucket rendering)
+// Used by efficient bucket rendering to process each primitive only once
+static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropolygonList* out_mpolys, RhShadingMode mode) {
     RhPrimitive* p = &item->prim;
-    if (depth < 3 || (p->type == RH_PRIM_POLYGON && p->data.polygon.count > 4)) {
+
+    // Compute MVP matrix for screen-space calculations
+    RhMat4 mvp = rh_mat4_mul(g_ctx->projection,
+                  rh_mat4_mul(g_ctx->view_matrix, item->transform));
+
+    // Compute screen-space bounding box area
+    float screen_area = ri_compute_screen_area(p, &mvp);
+
+    // Adjust area threshold for supersampling and shading rate
+    float ss_factor = (float)(g_ctx->pixel_samples_x * g_ctx->pixel_samples_y);
+    float shading_rate_sq = item->shading_rate * item->shading_rate;
+    float area_threshold = MAX_GRID_AREA * ss_factor * shading_rate_sq;
+
+    // Must split N-gons with > 4 vertices regardless of area
+    bool must_split_polygon = (p->type == RH_PRIM_POLYGON &&
+                               p->data.polygon.count > 4);
+
+    // Split conditions
+    bool need_more_splits = (depth < MIN_SPLIT_DEPTH) ||
+                            (screen_area >= area_threshold && depth < MAX_SPLIT_DEPTH);
+
+    if (need_more_splits || must_split_polygon) {
         RhPrimitive children[2];
         int count = rh_prim_split(p, children);
         for (int i = 0; i < count; i++) {
             RhRenderItem child_item = *item;
             child_item.prim = children[i];
-            ri_render_recursive(&child_item, depth + 1);
+            ri_process_item_recursive(&child_item, depth + 1, out_mpolys, mode);
             rh_prim_free_data(&children[i]);
         }
     } else {
-        int gridSize = 16;
-        if (p->type == RH_PRIM_POLYGON) gridSize = 8;
-        
+        // Grid size is fixed at MAX_GRID_SIZE
+        int gridSize = MAX_GRID_SIZE;
+
         RhMicroGrid* grid = rh_grid_create(gridSize, gridSize);
         if (!grid) return;
-        
+
+        // Track grid statistics
+        g_ctx->stats.total_grids++;
+        if (gridSize >= 1 && gridSize <= 16) {
+            g_ctx->stats.grids_by_size[gridSize]++;
+        }
+
         rh_prim_dice(p, gridSize, gridSize, grid);
 
         // Matrices
-        // CTM is Object->World
         RhMat4 model = item->transform;
         RhMat4 view = g_ctx->view_matrix;
         RhMat4 proj = g_ctx->projection;
-        
+
         RhMat4 model_inv = rh_mat4_inverse(model);
         RhMat4 model_inv_tr = rh_mat4_transpose(model_inv);
-        
+
         RhColor cur_col = item->color;
 
         // Prepare Lights in Camera Space
         RhLight cam_lights[MAX_LIGHTS];
         for (int k = 0; k < g_ctx->num_lights; k++) {
             cam_lights[k] = g_ctx->lights[k];
-            // Transform Position (Point)
             cam_lights[k].position = rh_mat4_mul_point(view, g_ctx->lights[k].position);
-            // Transform Direction (Vector)
             cam_lights[k].direction = rh_mat4_mul_dir(view, g_ctx->lights[k].direction);
             cam_lights[k].direction = rh_vec3_normalize(cam_lights[k].direction);
         }
@@ -849,7 +1355,7 @@ static void ri_render_recursive(RhRenderItem* item, int depth) {
         for (int i = 0; i < gridSize * gridSize; i++) {
             RhVec3 pos_obj = grid->positions[i];
             RhVec3 norm_obj = grid->normals[i];
-            
+
             // Obj -> World
             RhVec3 pos_world = rh_mat4_mul_point(model, pos_obj);
             RhVec3 norm_world = rh_mat4_mul_dir(model_inv_tr, norm_obj);
@@ -857,48 +1363,43 @@ static void ri_render_recursive(RhRenderItem* item, int depth) {
 
             // World -> Camera
             RhVec3 pos_cam = rh_mat4_mul_point(view, pos_world);
-            // For orthogonal view matrices (rotation + translation), we can use the matrix directly
-            // since the inverse-transpose of an orthogonal matrix is the matrix itself
             RhVec3 norm_cam = rh_mat4_mul_dir(view, norm_world);
             norm_cam = rh_vec3_normalize(norm_cam);
-            
+
             // Camera -> NDC
             RhVec3 pos_ndc = rh_mat4_mul_point(proj, pos_cam);
-            
-            // Debug Normal (Print center of first grid of first patch?)
-            // static int debug_n = 0;
-            // if (debug_n < 5 && i == 0) {
-            //    printf("N_obj: %f %f %f -> N_cam: %f %f %f\n", norm_obj.x, norm_obj.y, norm_obj.z, norm_cam.x, norm_cam.y, norm_cam.z);
-            //    debug_n++;
-            // }
 
             // --- Execute Shader ---
             RhShaderContext ctx;
-            ctx.P = pos_cam; // P is in Camera Space
-            ctx.N = norm_cam; // N is in Camera Space
-            ctx.I = pos_cam; // I = P (from eye at 0)
+            ctx.P = pos_cam;
+            ctx.N = norm_cam;
+            ctx.I = pos_cam;
             ctx.Cs = cur_col;
             ctx.Os = (RhColor){1,1,1};
-            ctx.light_list = cam_lights; // Use Camera Space lights
+            ctx.light_list = cam_lights;
             ctx.num_lights = g_ctx->num_lights;
-            
+            ctx.grid_ptr = (void*)(intptr_t)(g_ctx->grid_counter);
+            ctx.vertex_index = i;
+
             if (item->shader) {
                 item->shader(&ctx, item->shader_params);
             } else {
-                ctx.Ci = cur_col; // Fallback
+                ctx.Ci = cur_col;
             }
-            
+
             // Raster coords (use supersampled resolution)
             float rx = (pos_ndc.x + 1.0f) * 0.5f * g_ctx->ss_xres;
             float ry = (1.0f - (pos_ndc.y + 1.0f) * 0.5f) * g_ctx->ss_yres;
-            
-            
+
             grid->colors[i] = ctx.Ci;
             grid->positions[i] = rh_vec3_create(rx, ry, pos_ndc.z);
         }
-        
-        rh_raster_draw_grid(g_ctx->raster, grid);
+
+        // Convert grid to micropolygons instead of direct rasterization
+        ri_grid_to_mpolys(grid, out_mpolys, mode);
+
         rh_grid_destroy(grid);
+        g_ctx->grid_counter++;
     }
 }
 
@@ -1072,6 +1573,12 @@ void RiSurface(RtToken name, ...) {
         curr()->current_shader_params = NULL;
     } else if (strcmp(name, "shinymetal") == 0) {
         curr()->current_surface_shader = rh_shader_surface_shinymetal;
+        curr()->current_shader_params = NULL;
+    } else if (strcmp(name, "randomgrid") == 0) {
+        curr()->current_surface_shader = rh_shader_surface_randomgrid;
+        curr()->current_shader_params = NULL;
+    } else if (strcmp(name, "random") == 0) {
+        curr()->current_surface_shader = rh_shader_surface_random;
         curr()->current_shader_params = NULL;
     }
 

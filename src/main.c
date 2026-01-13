@@ -1,5 +1,6 @@
 #include "ri.h"
 #include <stdio.h>
+#include <string.h>
 #include <math.h>
 
 // Draw a single quad on the XZ plane at height y
@@ -15,12 +16,21 @@ static void draw_floor_quad(float x, float z, float size, float y) {
 }
 
 int main(int argc, char** argv) {
-    (void)argc; (void)argv;
+    // Parse command line arguments
+    int verbose = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+            verbose = 1;
+        }
+    }
 
     RiBegin(RI_NULL);
+    RiVerbose(verbose);
 
     RiDisplay("output.ppm", "file", "rgb", RI_NULL);
     RiFormat(800, 600, 1.0f);
+    RiPixelSamples(4, 4);
+    RiShadingRate(2.0);
     RiProjection("perspective", RI_NULL);
 
     // Setup Camera - looking at teapot from above and front
@@ -80,6 +90,21 @@ int main(int argc, char** argv) {
                 // Copper/orange color for teapot
                 RiColor((RtColor){0.9f, 0.5f, 0.2f});
                 RiGeometry("teapot", RI_NULL);
+            RiTransformEnd();
+
+            // --- Diagnostic Shader Demo: Spheres ---
+            // Sphere with randomgrid shader (each grid gets a unique color)
+            RiTransformBegin();
+                RiTranslate(-2.5f, 1.0f, -2.0f);
+                RiSurface("randomgrid", RI_NULL);
+                RiSphere(0.8f, -0.8f, 0.8f, 360.0f, RI_NULL);
+            RiTransformEnd();
+
+            // Sphere with random shader (each micropolygon gets a unique color)
+            RiTransformBegin();
+                RiTranslate(2.5f, 1.0f, -2.0f);
+                RiSurface("random", RI_NULL);
+                RiSphere(0.8f, -0.8f, 0.8f, 360.0f, RI_NULL);
             RiTransformEnd();
 
         RiWorldEnd();

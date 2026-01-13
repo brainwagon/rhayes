@@ -127,6 +127,9 @@ void rh_prim_free_data(RhPrimitive* p);
 // Calculate 3D bounding box (Object Space)
 RhBounds3 rh_prim_bound(const RhPrimitive* p);
 
+// Evaluate surface point at parametric coordinates (u,v)
+RhVec3 rh_prim_eval_point(const RhPrimitive* p, RhFloat u, RhFloat v);
+
 // Check if primitive is diceable (small enough on screen)
 // For MVP, we'll just check if the parametric domain is small enough or recurse to a depth.
 // Real REYES projects bounds to screen.

@@ -24,9 +24,13 @@ typedef struct {
     // Light Loop Helpers
     // In a real RSL compiler, illuminance() loops lights.
     // Here we might need access to the light list.
-    void* light_list; 
+    void* light_list;
     int num_lights;
-    
+
+    // Grid/vertex identification for diagnostic shaders
+    void* grid_ptr;      // Pointer to current grid (for hashing)
+    int vertex_index;    // Index of vertex within grid
+
 } RhShaderContext;
 
 typedef void (*RhShaderFunc)(RhShaderContext* ctx, void* params);
@@ -38,6 +42,10 @@ void rh_shader_surface_plastic(RhShaderContext* ctx, void* params);
 void rh_shader_surface_metal(RhShaderContext* ctx, void* params);
 void rh_shader_surface_paintedplastic(RhShaderContext* ctx, void* params);
 void rh_shader_surface_shinymetal(RhShaderContext* ctx, void* params);
+
+// Diagnostic Shaders
+void rh_shader_surface_randomgrid(RhShaderContext* ctx, void* params);
+void rh_shader_surface_random(RhShaderContext* ctx, void* params);
 
 // Parameter Structures for Standard Shaders
 typedef struct {

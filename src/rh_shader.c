@@ -1,6 +1,7 @@
 #include "rh_shader.h"
 #include <math.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 // Helper: Standard Lighting Loop (Simulating 'illuminance' or simple additive)
 // For MVP, we'll just pass lights array in void* or access global?
@@ -343,6 +344,48 @@ void rh_shader_surface_shinymetal(RhShaderContext* ctx, void* params) {
     ctx->Oi = ctx->Os;
     ctx->Ci = final;
 
+    ctx->Ci.r *= ctx->Oi.r;
+    ctx->Ci.g *= ctx->Oi.g;
+    ctx->Ci.b *= ctx->Oi.b;
+}
+
+// --- Diagnostic Shaders ---
+
+// Simple hash function for pointer values
+static unsigned int hash_ptr(void* ptr) {
+    unsigned long val = (unsigned long)ptr;
+    val = ((val >> 16) ^ val) * 0x45d9f3b;
+    val = ((val >> 16) ^ val) * 0x45d9f3b;
+    val = (val >> 16) ^ val;
+    return (unsigned int)val;
+}
+
+static RhColor hash_to_color(unsigned int hash) {
+    RhColor c;
+    c.r = ((hash >> 0) & 0xFF) / 255.0f;
+    c.g = ((hash >> 8) & 0xFF) / 255.0f;
+    c.b = ((hash >> 16) & 0xFF) / 255.0f;
+    return c;
+}
+
+void rh_shader_surface_randomgrid(RhShaderContext* ctx, void* params) {
+    (void)params;
+    unsigned int hash = hash_ptr(ctx->grid_ptr);
+    RhColor color = hash_to_color(hash);
+    ctx->Oi = ctx->Os;
+    ctx->Ci = color;
+    ctx->Ci.r *= ctx->Oi.r;
+    ctx->Ci.g *= ctx->Oi.g;
+    ctx->Ci.b *= ctx->Oi.b;
+}
+
+void rh_shader_surface_random(RhShaderContext* ctx, void* params) {
+    (void)params;
+    unsigned int hash = hash_ptr(ctx->grid_ptr);
+    hash ^= (unsigned int)ctx->vertex_index * 2654435761u;
+    RhColor color = hash_to_color(hash);
+    ctx->Oi = ctx->Os;
+    ctx->Ci = color;
     ctx->Ci.r *= ctx->Oi.r;
     ctx->Ci.g *= ctx->Oi.g;
     ctx->Ci.b *= ctx->Oi.b;

@@ -1,0 +1,43 @@
+##RenderMan RIB-Structure 1.1
+version 3.03
+Format 400 400 1
+Display "randomgrid.ppm" "file" "rgb"
+Projection "perspective" "fov" 45
+TransformBegin
+    Translate 0 0 6
+    WorldBegin
+        # No lights needed - randomgrid ignores lighting
+        Surface "randomgrid"
+
+        # Multiple spheres to show different grid colors
+        AttributeBegin
+            Translate -1.5 1 0
+            Sphere 0.8 -0.8 0.8 360
+        AttributeEnd
+
+        AttributeBegin
+            Translate 1.5 1 0
+            Sphere 0.8 -0.8 0.8 360
+        AttributeEnd
+
+        AttributeBegin
+            Translate -1.5 -1 0
+            Rotate -90 1 0 0
+            Cone 1.2 0.6 360
+        AttributeEnd
+
+        AttributeBegin
+            Translate 1.5 -1 0
+            Rotate -90 1 0 0
+            Cylinder 0.5 -0.6 0.6 360
+        AttributeEnd
+
+        # Teapot in center
+        AttributeBegin
+            Translate 0 0 0
+            Scale 0.3 0.3 0.3
+            Rotate -90 1 0 0
+            Geometry "teapot"
+        AttributeEnd
+    WorldEnd
+TransformEnd

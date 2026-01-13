@@ -120,11 +120,12 @@ static void draw_micropolygon(RhRasterizer* r, RhVec3 v0, RhVec3 v1, RhVec3 v2, 
                 float w1 = edge_function(v3, v0, px, py);
                 float w2 = edge_function(v0, v1, px, py);
 
-                // Check if inside (all same sign as area, or just all >= 0 if area > 0)
-                // Assuming consistent winding, let's just check if they match area sign
-                // Or simply: if (w0 >= 0 && w1 >= 0 && w2 >= 0) if winding is CCW/CW specific.
-                // Let's rely on non-negative weights for now (standard rasterization).
-                if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+                // Check if inside - handle both CCW (area > 0) and CW (area < 0) winding
+                // For CCW: all w >= 0 when inside
+                // For CW: all w <= 0 when inside
+                bool inside = (area1 > 0) ? (w0 >= 0 && w1 >= 0 && w2 >= 0)
+                                          : (w0 <= 0 && w1 <= 0 && w2 <= 0);
+                if (inside) {
                     float invArea = 1.0f / area1;
                     w0 *= invArea;
                     w1 *= invArea;
@@ -156,7 +157,10 @@ static void draw_micropolygon(RhRasterizer* r, RhVec3 v0, RhVec3 v1, RhVec3 v2, 
                 float u1 = edge_function(v3, v1, px, py); // Weight for v2
                 float u2 = edge_function(v1, v2, px, py); // Weight for v3
 
-                if (u0 >= 0 && u1 >= 0 && u2 >= 0) {
+                // Handle both CCW and CW winding
+                bool inside2 = (area2 > 0) ? (u0 >= 0 && u1 >= 0 && u2 >= 0)
+                                           : (u0 <= 0 && u1 <= 0 && u2 <= 0);
+                if (inside2) {
                      float invArea = 1.0f / area2;
                      u0 *= invArea;
                      u1 *= invArea;

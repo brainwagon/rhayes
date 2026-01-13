@@ -5,11 +5,11 @@ Display "disk.ppm" "file" "rgb"
 Projection "perspective" "fov" 45
 TransformBegin
     Translate 0 0 3
-    Rotate -45 1 0 0
     WorldBegin
-        LightSource "distantlight" "intensity" 1 "from" [0 1 -1]
+        LightSource "distantlight" "intensity" 1 "from" [0 1 1]
         Color [0.8 0.8 0.2]
         Surface "matte"
+        Rotate -45 1 0 0
         Disk 0 1 360
     WorldEnd
 TransformEnd

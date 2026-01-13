@@ -642,6 +642,22 @@ static RhVec3 evaluate_hyperboloid(const RhPrimitive* p, RhFloat u, RhFloat v) {
     return pos;
 }
 
+// Public function to evaluate a single surface point
+RhVec3 rh_prim_eval_point(const RhPrimitive* p, RhFloat u, RhFloat v) {
+    switch (p->type) {
+        case RH_PRIM_SPHERE: return evaluate_sphere(p, u, v);
+        case RH_PRIM_CYLINDER: return evaluate_cylinder(p, u, v);
+        case RH_PRIM_CONE: return evaluate_cone(p, u, v);
+        case RH_PRIM_PARABOLOID: return evaluate_paraboloid(p, u, v);
+        case RH_PRIM_POLYGON: return evaluate_polygon(p, u, v);
+        case RH_PRIM_PATCH_BICUBIC: return evaluate_patch_bicubic(p, u, v);
+        case RH_PRIM_DISK: return evaluate_disk(p, u, v);
+        case RH_PRIM_TORUS: return evaluate_torus(p, u, v);
+        case RH_PRIM_HYPERBOLOID: return evaluate_hyperboloid(p, u, v);
+        default: return rh_vec3_create(0, 0, 0);
+    }
+}
+
 void rh_prim_dice(const RhPrimitive* p, int u_res, int v_res, RhMicroGrid* grid) {
     // Fill the grid with vertices
     // We iterate u_res and v_res steps over the primitive's current u_min/max range

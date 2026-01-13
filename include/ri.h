@@ -39,6 +39,7 @@ RtPointer RiGetContext(void);
 void RiContext(RtPointer ctx);
 
 // 2. Options (Scene Description)
+void RiOption(RtToken name, ...);
 void RiFormat(RtInt xresolution, RtInt yresolution, RtFloat pixelaspectratio);
 void RiPixelSamples(RtFloat xsamples, RtFloat ysamples);
 void RiPixelFilter(RtFilterFunc filterfunc, RtFloat xwidth, RtFloat ywidth);
@@ -78,6 +79,7 @@ extern RtMatrix RiPowerBasis;
 // 5. Attributes
 void RiColor(RtColor color);
 void RiOpacity(RtColor color);
+void RiShadingRate(RtFloat size);
 
 // 6. Scene Structure
 void RiWorldBegin(void);
