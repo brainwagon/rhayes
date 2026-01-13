@@ -8,6 +8,7 @@ bin/
 *.ppm
 output.ppm
 .DS_Store
+rhayes
 
 # Test output (but not reference images)
 tests/output/
