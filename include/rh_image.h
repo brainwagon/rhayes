@@ -34,8 +34,12 @@ RhColor rh_image_get_pixel(const RhImage* img, int x, int y);
 // Save the image to a file in PPM (P3) format
 void rh_image_save_ppm(const RhImage* img, const char* filename);
 
-// Save the image to a file in PNG format with alpha channel
+// Save the image to a file in PNG format with alpha channel (RGBA)
 void rh_image_save_png(const RhImage* img, const char* filename);
+
+// Save the image to a file in PNG format with specified channel count
+// channels: 3 for RGB, 4 for RGBA
+void rh_image_save_png_channels(const RhImage* img, const char* filename, int channels);
 
 // Free the image memory
 void rh_image_destroy(RhImage* img);

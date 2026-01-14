@@ -79,8 +79,13 @@ static float luminance_alpha(RhColor opacity) {
     return 0.2126f * opacity.r + 0.7152f * opacity.g + 0.0722f * opacity.b;
 }
 
-void rh_image_save_png(const RhImage* img, const char* filename) {
-    unsigned char* data = (unsigned char*)malloc((size_t)img->width * (size_t)img->height * 4);
+void rh_image_save_png_channels(const RhImage* img, const char* filename, int channels) {
+    if (channels != 3 && channels != 4) {
+        fprintf(stderr, "Error: PNG channels must be 3 (RGB) or 4 (RGBA)\n");
+        return;
+    }
+
+    unsigned char* data = (unsigned char*)malloc((size_t)img->width * (size_t)img->height * (size_t)channels);
     if (!data) {
         fprintf(stderr, "Error: Could not allocate memory for PNG output.\n");
         return;
@@ -101,22 +106,31 @@ void rh_image_save_png(const RhImage* img, const char* filename) {
             r = g = b = 0.0f;
         }
 
-        data[i * 4 + 0] = to_byte(r);
-        data[i * 4 + 1] = to_byte(g);
-        data[i * 4 + 2] = to_byte(b);
-        data[i * 4 + 3] = to_byte(alpha);
+        if (channels == 4) {
+            data[i * 4 + 0] = to_byte(r);
+            data[i * 4 + 1] = to_byte(g);
+            data[i * 4 + 2] = to_byte(b);
+            data[i * 4 + 3] = to_byte(alpha);
+        } else {
+            // RGB: composite against black background
+            data[i * 3 + 0] = to_byte(r * alpha);
+            data[i * 3 + 1] = to_byte(g * alpha);
+            data[i * 3 + 2] = to_byte(b * alpha);
+        }
     }
 
     // Use LodePNGState to set bKGD chunk
     LodePNGState state;
     lodepng_state_init(&state);
 
-    // Input is RGBA 8-bit
-    state.info_raw.colortype = LCT_RGBA;
+    if (channels == 4) {
+        state.info_raw.colortype = LCT_RGBA;
+        state.info_png.color.colortype = LCT_RGBA;
+    } else {
+        state.info_raw.colortype = LCT_RGB;
+        state.info_png.color.colortype = LCT_RGB;
+    }
     state.info_raw.bitdepth = 8;
-
-    // Output as RGBA 8-bit
-    state.info_png.color.colortype = LCT_RGBA;
     state.info_png.color.bitdepth = 8;
 
     // Set bKGD chunk to black
@@ -141,6 +155,10 @@ void rh_image_save_png(const RhImage* img, const char* filename) {
     } else {
         printf("Saved image to %s\n", filename);
     }
+}
+
+void rh_image_save_png(const RhImage* img, const char* filename) {
+    rh_image_save_png_channels(img, filename, 4);
 }
 
 void rh_image_destroy(RhImage* img) {

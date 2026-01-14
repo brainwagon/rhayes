@@ -32,10 +32,10 @@ int main(int argc, char** argv) {
         RiOption("statistics", "endofframe", &stats_on, RI_NULL);
     }
 
-    RiDisplay("output.png", "file", "rgba", RI_NULL);
+    RiDisplay("output.png", "file", "rgb", RI_NULL);
     RiFormat(800, 600, 1.0f);
     RiPixelSamples(4, 4);
-    RiShadingRate(2.0);
+    RiShadingRate(4.0);
     RiProjection("perspective", RI_NULL);
 
     // Setup Camera - looking at teapot from above and front

@@ -147,6 +147,7 @@ typedef struct {
     // Options
     int xres, yres;
     char display_name[256];
+    int display_channels;  // 3 for RGB, 4 for RGBA
     RhMat4 projection;
 
     // Supersampling
@@ -636,7 +637,8 @@ void RiBegin(RtToken name) {
     // Defaults
     g_ctx->xres = 800;
     g_ctx->yres = 600;
-    strcpy(g_ctx->display_name, "ri_output.ppm");
+    strcpy(g_ctx->display_name, "ri_output.png");
+    g_ctx->display_channels = 4;  // RGBA by default
     
     // Default State
     g_ctx->stack_ptr = 0;
@@ -756,7 +758,18 @@ void RiFormat(RtInt xresolution, RtInt yresolution, RtFloat pixelaspectratio) {
 void RiDisplay(RtToken name, RtToken type, RtToken mode, ...) {
     if (!g_ctx) return;
     if (name) strncpy(g_ctx->display_name, name, 255);
-    (void)type; (void)mode;
+
+    // Parse mode to determine channel count
+    if (mode) {
+        if (strcmp(mode, "rgb") == 0) {
+            g_ctx->display_channels = 3;
+        } else if (strcmp(mode, "rgba") == 0) {
+            g_ctx->display_channels = 4;
+        }
+        // Other modes (z, etc.) not yet supported
+    }
+
+    (void)type;  // "file" is the only supported type
 }
 
 void RiPixelSamples(RtFloat xsamples, RtFloat ysamples) {
@@ -1127,7 +1140,7 @@ void RiWorldEnd(void) {
 
     // Save the image
     if (g_ctx->raster && g_ctx->raster->image) {
-        rh_image_save_png(g_ctx->raster->image, g_ctx->display_name);
+        rh_image_save_png_channels(g_ctx->raster->image, g_ctx->display_name, g_ctx->display_channels);
     }
 
     // Output rendering statistics if enabled via Option "statistics" "endofframe"
