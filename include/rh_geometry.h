@@ -10,9 +10,9 @@
 typedef struct {
     int width;   // u dimension (vertices)
     int height;  // v dimension (vertices)
-    RhVec3* positions; // World or Screen space positions
-    RhColor* colors;   // Shaded colors
-    // Normals would be here for shading
+    RhVec3* positions;  // World or Screen space positions
+    RhColor* colors;    // Shaded colors (Ci - premultiplied)
+    RhColor* opacities; // Shaded opacities (Oi)
     RhVec3* normals;
 } RhMicroGrid;
 

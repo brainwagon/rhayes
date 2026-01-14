@@ -1,7 +1,7 @@
 ##RenderMan RIB-Structure 1.1
 version 3.03
 Format 200 200 1
-Display "pixelsamples.ppm" "file" "rgb"
+Display "pixelsamples.png" "file" "rgba"
 Projection "perspective" "fov" 45
 PixelSamples 2 2
 TransformBegin

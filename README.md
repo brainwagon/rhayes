@@ -78,7 +78,7 @@ Rhayes is a fast, portable software renderer based on the REYES (Render Everythi
 The renderer implements a classic REYES pipeline: recursive splitting of primitives, dicing into micropolygon grids, shading at vertices, and stochastic sampling for visibility and anti-aliasing.
 
 ## Features
-- **Pure C99**: No C++, no external libraries.
+- **Pure C99**: Minimal external dependencies (lodepng for PNG I/O).
 - **REYES Pipeline**:
     - Recursive splitting and dicing of primitives.
     - Shading in object/eye space before visibility testing.
@@ -92,10 +92,14 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
 - **Shading & Lighting**:
     - Surface shaders: `matte`, `plastic`, `metal`, and diagnostic shaders (`random`, `randomgrid`).
     - Light sources: Point and Distant lights.
+- **Texture Support** (in progress):
+    - PNG texture loading with automatic mipmap generation.
+    - Box-filter decimation for mipmap pyramid.
+    - Support for grayscale, RGB, and RGBA textures.
 - **RIB Support**:
     - RIB parser for scene description.
     - RIB output for scene serialization.
-- **Output**: PPM image format.
+- **Output**: PNG image format with alpha channel and bKGD chunk support.
 
 ## Building
 Rhayes uses a standard Makefile.
@@ -118,7 +122,7 @@ Run the default demo which renders a teapot on a checkerboard floor:
 ```sh
 ./rhayes
 ```
-This generates `output.ppm`.
+This generates `output.png`.
 
 ### RIB Renderer
 Render any RIB (RenderMan Interface Bytestream) file:
@@ -149,6 +153,12 @@ make test
 - `FSD.md`: Functional System Description.
 - `RISPEC.md` / `PARTI.md`: RenderMan Interface Specification documentation.
 - `PLAN.md`: Project development plan.
+
+## Work in Progress
+
+Current development focus:
+- **Texture Mapping**: Texture loading infrastructure is complete (PNG loading with mipmap generation). Next steps: integrate texture sampling into shaders via u/v coordinates, implement filtering modes (nearest, bilinear, trilinear).
+- **Shader Enhancements**: The `paintedplastic` and `shinymetal` shaders have placeholder texture fields ready for integration.
 
 ## License
 MIT License.

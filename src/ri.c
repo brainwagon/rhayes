@@ -87,7 +87,9 @@ typedef enum {
 typedef struct {
     RhVec3 v[4];       // Screen-space vertices (x=pixel, y=pixel, z=depth)
     RhColor c[4];      // Per-vertex colors (for interpolation mode)
+    RhColor o[4];      // Per-vertex opacities (for interpolation mode)
     RhColor center;    // Center color (for flat shading mode)
+    RhColor center_opacity; // Center opacity (for flat shading mode)
     int min_x, min_y;  // Screen-space bounding box
     int max_x, max_y;
 } RhMicropolygon;
@@ -313,10 +315,21 @@ static void ri_grid_to_mpolys(const RhMicroGrid* grid, RhMicropolygonList* out_l
             mpoly.c[2] = grid->colors[i11];
             mpoly.c[3] = grid->colors[i01];
 
+            // Copy per-vertex opacities
+            mpoly.o[0] = grid->opacities[i00];
+            mpoly.o[1] = grid->opacities[i10];
+            mpoly.o[2] = grid->opacities[i11];
+            mpoly.o[3] = grid->opacities[i01];
+
             // Compute center color (average of 4 corners)
             mpoly.center.r = (mpoly.c[0].r + mpoly.c[1].r + mpoly.c[2].r + mpoly.c[3].r) * 0.25f;
             mpoly.center.g = (mpoly.c[0].g + mpoly.c[1].g + mpoly.c[2].g + mpoly.c[3].g) * 0.25f;
             mpoly.center.b = (mpoly.c[0].b + mpoly.c[1].b + mpoly.c[2].b + mpoly.c[3].b) * 0.25f;
+
+            // Compute center opacity (average of 4 corners)
+            mpoly.center_opacity.r = (mpoly.o[0].r + mpoly.o[1].r + mpoly.o[2].r + mpoly.o[3].r) * 0.25f;
+            mpoly.center_opacity.g = (mpoly.o[0].g + mpoly.o[1].g + mpoly.o[2].g + mpoly.o[3].g) * 0.25f;
+            mpoly.center_opacity.b = (mpoly.o[0].b + mpoly.o[1].b + mpoly.o[2].b + mpoly.o[3].b) * 0.25f;
 
             // Compute screen-space bounding box
             float min_x = mpoly.v[0].x;
@@ -405,16 +418,22 @@ static void ri_sample_mpoly(
                         r->zbuffer[idx] = z;
 
                         RhColor final_color;
+                        RhColor final_opacity;
                         if (mode == RH_SHADE_CENTER) {
                             final_color = mpoly->center;
+                            final_opacity = mpoly->center_opacity;
                         } else {
                             // Per-vertex interpolation
                             final_color.r = w0 * mpoly->c[0].r + w1 * mpoly->c[1].r + w2 * mpoly->c[3].r;
                             final_color.g = w0 * mpoly->c[0].g + w1 * mpoly->c[1].g + w2 * mpoly->c[3].g;
                             final_color.b = w0 * mpoly->c[0].b + w1 * mpoly->c[1].b + w2 * mpoly->c[3].b;
+
+                            final_opacity.r = w0 * mpoly->o[0].r + w1 * mpoly->o[1].r + w2 * mpoly->o[3].r;
+                            final_opacity.g = w0 * mpoly->o[0].g + w1 * mpoly->o[1].g + w2 * mpoly->o[3].g;
+                            final_opacity.b = w0 * mpoly->o[0].b + w1 * mpoly->o[1].b + w2 * mpoly->o[3].b;
                         }
 
-                        rh_image_set_pixel(r->image, x, y, final_color);
+                        rh_image_set_pixel_with_opacity(r->image, x, y, final_color, final_opacity);
                         drawn = true;
                     }
                 }
@@ -441,16 +460,22 @@ static void ri_sample_mpoly(
                         r->zbuffer[idx] = z;
 
                         RhColor final_color;
+                        RhColor final_opacity;
                         if (mode == RH_SHADE_CENTER) {
                             final_color = mpoly->center;
+                            final_opacity = mpoly->center_opacity;
                         } else {
                             // Per-vertex interpolation
                             final_color.r = u0 * mpoly->c[1].r + u1 * mpoly->c[2].r + u2 * mpoly->c[3].r;
                             final_color.g = u0 * mpoly->c[1].g + u1 * mpoly->c[2].g + u2 * mpoly->c[3].g;
                             final_color.b = u0 * mpoly->c[1].b + u1 * mpoly->c[2].b + u2 * mpoly->c[3].b;
+
+                            final_opacity.r = u0 * mpoly->o[1].r + u1 * mpoly->o[2].r + u2 * mpoly->o[3].r;
+                            final_opacity.g = u0 * mpoly->o[1].g + u1 * mpoly->o[2].g + u2 * mpoly->o[3].g;
+                            final_opacity.b = u0 * mpoly->o[1].b + u1 * mpoly->o[2].b + u2 * mpoly->o[3].b;
                         }
 
-                        rh_image_set_pixel(r->image, x, y, final_color);
+                        rh_image_set_pixel_with_opacity(r->image, x, y, final_color, final_opacity);
                     }
                 }
             }
@@ -1043,6 +1068,7 @@ void RiWorldEnd(void) {
         for (int py = 0; py < g_ctx->yres; py++) {
             for (int px = 0; px < g_ctx->xres; px++) {
                 float r = 0, g = 0, b = 0;
+                float or_ = 0, og = 0, ob = 0;  // Opacity accumulator
                 float weight_sum = 0;
 
                 // Sample all subpixels for this pixel
@@ -1067,6 +1093,14 @@ void RiWorldEnd(void) {
                         r += c.r * w;
                         g += c.g * w;
                         b += c.b * w;
+
+                        // Also filter opacity
+                        int idx = src_y * ss_image->width + src_x;
+                        RhColor o = ss_image->opacities[idx];
+                        or_ += o.r * w;
+                        og += o.g * w;
+                        ob += o.b * w;
+
                         weight_sum += w;
                     }
                 }
@@ -1075,9 +1109,13 @@ void RiWorldEnd(void) {
                     r /= weight_sum;
                     g /= weight_sum;
                     b /= weight_sum;
+                    or_ /= weight_sum;
+                    og /= weight_sum;
+                    ob /= weight_sum;
                 }
 
-                rh_image_set_pixel(final_image, px, py, (RhColor){r, g, b});
+                rh_image_set_pixel_with_opacity(final_image, px, py,
+                    (RhColor){r, g, b}, (RhColor){or_, og, ob});
             }
         }
 
@@ -1088,7 +1126,7 @@ void RiWorldEnd(void) {
 
     // Save the image
     if (g_ctx->raster && g_ctx->raster->image) {
-        rh_image_save_ppm(g_ctx->raster->image, g_ctx->display_name);
+        rh_image_save_png(g_ctx->raster->image, g_ctx->display_name);
     }
 
     // Output rendering statistics if enabled via Option "statistics" "endofframe"
@@ -1385,6 +1423,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
                 item->shader(&ctx, item->shader_params);
             } else {
                 ctx.Ci = cur_col;
+                ctx.Oi = ctx.Os;  // Default: pass through opacity
             }
 
             // Raster coords (use supersampled resolution)
@@ -1392,6 +1431,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             float ry = (1.0f - (pos_ndc.y + 1.0f) * 0.5f) * g_ctx->ss_yres;
 
             grid->colors[i] = ctx.Ci;
+            grid->opacities[i] = ctx.Oi;
             grid->positions[i] = rh_vec3_create(rx, ry, pos_ndc.z);
         }
 

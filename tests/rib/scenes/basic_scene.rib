@@ -1,7 +1,7 @@
 ##RenderMan RIB-Structure 1.1
 version 3.03
 Format 400 300 1
-Display "basic_scene.ppm" "file" "rgb"
+Display "basic_scene.png" "file" "rgba"
 Projection "perspective" "fov" 45
 PixelSamples 2 2
 

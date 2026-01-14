@@ -25,9 +25,14 @@ int main(int argc, char** argv) {
     }
 
     RiBegin(RI_NULL);
-    RiVerbose(verbose);
 
-    RiDisplay("output.ppm", "file", "rgb", RI_NULL);
+    // Enable statistics output if verbose flag is set
+    if (verbose) {
+        RtInt stats_on = 1;
+        RiOption("statistics", "endofframe", &stats_on, RI_NULL);
+    }
+
+    RiDisplay("output.png", "file", "rgba", RI_NULL);
     RiFormat(800, 600, 1.0f);
     RiPixelSamples(4, 4);
     RiShadingRate(2.0);
@@ -112,6 +117,6 @@ int main(int argc, char** argv) {
 
     RiEnd();
 
-    printf("Teapot on checkerboard rendered to output.ppm\n");
+    printf("Teapot on checkerboard rendered to output.png\n");
     return 0;
 }

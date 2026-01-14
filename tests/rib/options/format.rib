@@ -1,7 +1,7 @@
 ##RenderMan RIB-Structure 1.1
 version 3.03
 Format 300 150 1
-Display "format.ppm" "file" "rgb"
+Display "format.png" "file" "rgba"
 Projection "perspective" "fov" 45
 TransformBegin
     Translate 0 0 3

@@ -47,6 +47,7 @@ void rh_raster_clear(RhRasterizer* r) {
     int count = r->width * r->height;
     for (int i = 0; i < count; i++) {
         r->image->pixels[i] = (RhColor){0.0f, 0.0f, 0.0f};
+        r->image->opacities[i] = (RhColor){0.0f, 0.0f, 0.0f}; // Fully transparent
         r->zbuffer[i] = FLT_MAX; // Far plane
     }
 }
@@ -59,7 +60,10 @@ static inline float edge_function(RhVec3 v0, RhVec3 v1, float px, float py) {
 
 // Rasterize a single Micropolygon (Quad)
 // Splitting into two triangles for simplicity in this basic implementation
-static void draw_micropolygon(RhRasterizer* r, RhVec3 v0, RhVec3 v1, RhVec3 v2, RhVec3 v3, RhColor c0, RhColor c1, RhColor c2, RhColor c3) {
+static void draw_micropolygon(RhRasterizer* r,
+    RhVec3 v0, RhVec3 v1, RhVec3 v2, RhVec3 v3,
+    RhColor c0, RhColor c1, RhColor c2, RhColor c3,
+    RhColor o0, RhColor o1, RhColor o2, RhColor o3) {
     // We will approximate the micropolygon as a single flat quad or two triangles.
     // REYES often rasterizes the bounding box of the micropolygon if it's small enough (< 1 pixel).
     // For this "functional system", let's implement a standard triangle rasterizer for the quad (v0-v1-v3) and (v1-v2-v3).
@@ -144,8 +148,14 @@ static void draw_micropolygon(RhRasterizer* r, RhVec3 v0, RhVec3 v1, RhVec3 v2, 
                         final_color.r = w0 * c0.r + w1 * c1.r + w2 * c3.r;
                         final_color.g = w0 * c0.g + w1 * c1.g + w2 * c3.g;
                         final_color.b = w0 * c0.b + w1 * c1.b + w2 * c3.b;
-                        
-                        rh_image_set_pixel(r->image, x, y, final_color);
+
+                        // Interpolate Opacity
+                        RhColor final_opacity;
+                        final_opacity.r = w0 * o0.r + w1 * o1.r + w2 * o3.r;
+                        final_opacity.g = w0 * o0.g + w1 * o1.g + w2 * o3.g;
+                        final_opacity.b = w0 * o0.b + w1 * o1.b + w2 * o3.b;
+
+                        rh_image_set_pixel_with_opacity(r->image, x, y, final_color, final_opacity);
                         drawn = true;
                     }
                 }
@@ -178,8 +188,14 @@ static void draw_micropolygon(RhRasterizer* r, RhVec3 v0, RhVec3 v1, RhVec3 v2, 
                          final_color.r = u0 * c1.r + u1 * c2.r + u2 * c3.r;
                          final_color.g = u0 * c1.g + u1 * c2.g + u2 * c3.g;
                          final_color.b = u0 * c1.b + u1 * c2.b + u2 * c3.b;
-                         
-                         rh_image_set_pixel(r->image, x, y, final_color);
+
+                         // Interpolate Opacity
+                         RhColor final_opacity;
+                         final_opacity.r = u0 * o1.r + u1 * o2.r + u2 * o3.r;
+                         final_opacity.g = u0 * o1.g + u1 * o2.g + u2 * o3.g;
+                         final_opacity.b = u0 * o1.b + u1 * o2.b + u2 * o3.b;
+
+                         rh_image_set_pixel_with_opacity(r->image, x, y, final_color, final_opacity);
                      }
                 }
             }
@@ -203,13 +219,18 @@ void rh_raster_draw_grid(RhRasterizer* r, const RhMicroGrid* g) {
             RhVec3 v1 = g->positions[i10]; // top-right
             RhVec3 v2 = g->positions[i11]; // bottom-right
             RhVec3 v3 = g->positions[i01]; // bottom-left
-            
+
             RhColor c0 = g->colors[i00];
             RhColor c1 = g->colors[i10];
             RhColor c2 = g->colors[i11];
             RhColor c3 = g->colors[i01];
 
-            draw_micropolygon(r, v0, v1, v2, v3, c0, c1, c2, c3);
+            RhColor o0 = g->opacities[i00];
+            RhColor o1 = g->opacities[i10];
+            RhColor o2 = g->opacities[i11];
+            RhColor o3 = g->opacities[i01];
+
+            draw_micropolygon(r, v0, v1, v2, v3, c0, c1, c2, c3, o0, o1, o2, o3);
         }
     }
 }

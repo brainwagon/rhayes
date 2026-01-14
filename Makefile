@@ -10,7 +10,8 @@ BIN_DIR = bin
 
 # Object files by library
 LIBRH_OBJS = $(OBJ_DIR)/rh_math.o $(OBJ_DIR)/rh_geometry.o $(OBJ_DIR)/rh_shader.o \
-             $(OBJ_DIR)/rh_raster.o $(OBJ_DIR)/rh_image.o
+             $(OBJ_DIR)/rh_raster.o $(OBJ_DIR)/rh_image.o $(OBJ_DIR)/lodepng.o \
+             $(OBJ_DIR)/rh_texture.o
 LIBRI_OBJS = $(OBJ_DIR)/ri.o
 LIBRIB_OBJS = $(OBJ_DIR)/rib_output.o
 LIBRIBPARSE_OBJS = $(OBJ_DIR)/rib_parse.o
@@ -96,10 +97,10 @@ generate-refs: $(RENDER)
 	@echo "Generating reference images..."
 	@for rib in $$(find $(TEST_DIR)/rib -name "*.rib"); do \
 		rel=$${rib#$(TEST_DIR)/rib/}; \
-		ref="$(TEST_DIR)/reference/$${rel%.rib}.ppm"; \
+		ref="$(TEST_DIR)/reference/$${rel%.rib}.png"; \
 		mkdir -p "$$(dirname "$$ref")"; \
 		temp="/tmp/temp_$$(basename $$rib)"; \
-		sed "s|Display.*|Display \"$$ref\" \"file\" \"rgb\"|" "$$rib" > "$$temp"; \
+		sed "s|Display.*|Display \"$$ref\" \"file\" \"rgba\"|" "$$rib" > "$$temp"; \
 		$(RENDER) "$$temp" 2>/dev/null || true; \
 		rm -f "$$temp"; \
 	done

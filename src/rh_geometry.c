@@ -13,9 +13,10 @@ RhMicroGrid* rh_grid_create(int width, int height) {
     int count = width * height;
     g->positions = (RhVec3*)malloc(count * sizeof(RhVec3));
     g->colors = (RhColor*)malloc(count * sizeof(RhColor));
+    g->opacities = (RhColor*)malloc(count * sizeof(RhColor));
     g->normals = (RhVec3*)malloc(count * sizeof(RhVec3));
 
-    if (!g->positions || !g->colors || !g->normals) {
+    if (!g->positions || !g->colors || !g->opacities || !g->normals) {
         rh_grid_destroy(g);
         return NULL;
     }
@@ -26,6 +27,7 @@ void rh_grid_destroy(RhMicroGrid* g) {
     if (g) {
         if (g->positions) free(g->positions);
         if (g->colors) free(g->colors);
+        if (g->opacities) free(g->opacities);
         if (g->normals) free(g->normals);
         free(g);
     }

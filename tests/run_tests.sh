@@ -36,14 +36,14 @@ run_render_test() {
     local rib_file="$1"
     local rel_path="${rib_file#$RIB_DIR/}"
     local name="$(basename "$rib_file" .rib)"
-    local ref_file="$REF_DIR/${rel_path%.rib}.ppm"
-    local out_file="$OUT_DIR/${rel_path%.rib}.ppm"
+    local ref_file="$REF_DIR/${rel_path%.rib}.png"
+    local out_file="$OUT_DIR/${rel_path%.rib}.png"
 
     mkdir -p "$(dirname "$out_file")"
 
     # Create temp RIB with output redirected
     local temp_rib="$OUT_DIR/temp_$name.rib"
-    sed "s|Display.*|Display \"$out_file\" \"file\" \"rgb\"|" "$rib_file" > "$temp_rib"
+    sed "s|Display.*|Display \"$out_file\" \"file\" \"rgba\"|" "$rib_file" > "$temp_rib"
 
     if ! "$RENDER" "$temp_rib" 2>/dev/null; then
         echo -e "${RED}FAIL${NC} [render] $name (render failed)"

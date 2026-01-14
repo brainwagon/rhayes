@@ -1,7 +1,7 @@
 ##RenderMan RIB-Structure 1.1
 version 3.03
 Format 400 400 1
-Display "randomgrid.ppm" "file" "rgb"
+Display "randomgrid.png" "file" "rgba"
 Projection "perspective" "fov" 45
 TransformBegin
     Translate 0 0 6
