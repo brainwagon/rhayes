@@ -1391,6 +1391,12 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             cam_lights[k].direction = rh_vec3_normalize(cam_lights[k].direction);
         }
 
+        // Temporary arrays for two-pass shading (needed for screen-space derivatives)
+        RhVec3* screen_pos = (RhVec3*)malloc(gridSize * gridSize * sizeof(RhVec3));
+        RhVec3* cam_positions = (RhVec3*)malloc(gridSize * gridSize * sizeof(RhVec3));
+        RhVec3* cam_normals = (RhVec3*)malloc(gridSize * gridSize * sizeof(RhVec3));
+
+        // First pass: transform all vertices to screen space
         for (int i = 0; i < gridSize * gridSize; i++) {
             RhVec3 pos_obj = grid->positions[i];
             RhVec3 norm_obj = grid->normals[i];
@@ -1401,18 +1407,95 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             norm_world = rh_vec3_normalize(norm_world);
 
             // World -> Camera
-            RhVec3 pos_cam = rh_mat4_mul_point(view, pos_world);
-            RhVec3 norm_cam = rh_mat4_mul_dir(view, norm_world);
-            norm_cam = rh_vec3_normalize(norm_cam);
+            cam_positions[i] = rh_mat4_mul_point(view, pos_world);
+            cam_normals[i] = rh_vec3_normalize(rh_mat4_mul_dir(view, norm_world));
 
-            // Camera -> NDC
-            RhVec3 pos_ndc = rh_mat4_mul_point(proj, pos_cam);
+            // Camera -> NDC -> Screen
+            RhVec3 pos_ndc = rh_mat4_mul_point(proj, cam_positions[i]);
+            float rx = (pos_ndc.x + 1.0f) * 0.5f * g_ctx->ss_xres;
+            float ry = (1.0f - (pos_ndc.y + 1.0f) * 0.5f) * g_ctx->ss_yres;
+            screen_pos[i] = rh_vec3_create(rx, ry, pos_ndc.z);
+        }
+
+        // Second pass: shade with proper screen-space texture derivatives
+        for (int i = 0; i < gridSize * gridSize; i++) {
+            int gx = i % gridSize;
+            int gy = i / gridSize;
+
+            // Compute screen-space texture derivatives using finite differences
+            // We compute the texture footprint per pixel by measuring how texture
+            // coordinates change along each grid direction relative to screen distance
+
+            // Derivatives along grid u-direction (gx varies)
+            float screen_dx_u = 0.0f, screen_dy_u = 0.0f, tex_du = 0.0f, tex_dv_u = 0.0f;
+            if (gx < gridSize - 1) {
+                int i_right = i + 1;
+                screen_dx_u = screen_pos[i_right].x - screen_pos[i].x;
+                screen_dy_u = screen_pos[i_right].y - screen_pos[i].y;
+                tex_du = grid->u_coords[i_right] - grid->u_coords[i];
+                tex_dv_u = grid->v_coords[i_right] - grid->v_coords[i];
+            } else if (gx > 0) {
+                int i_left = i - 1;
+                screen_dx_u = screen_pos[i].x - screen_pos[i_left].x;
+                screen_dy_u = screen_pos[i].y - screen_pos[i_left].y;
+                tex_du = grid->u_coords[i] - grid->u_coords[i_left];
+                tex_dv_u = grid->v_coords[i] - grid->v_coords[i_left];
+            }
+
+            // Derivatives along grid v-direction (gy varies)
+            float screen_dx_v = 0.0f, screen_dy_v = 0.0f, tex_du_v = 0.0f, tex_dv = 0.0f;
+            if (gy < gridSize - 1) {
+                int i_down = i + gridSize;
+                screen_dx_v = screen_pos[i_down].x - screen_pos[i].x;
+                screen_dy_v = screen_pos[i_down].y - screen_pos[i].y;
+                tex_du_v = grid->u_coords[i_down] - grid->u_coords[i];
+                tex_dv = grid->v_coords[i_down] - grid->v_coords[i];
+            } else if (gy > 0) {
+                int i_up = i - gridSize;
+                screen_dx_v = screen_pos[i].x - screen_pos[i_up].x;
+                screen_dy_v = screen_pos[i].y - screen_pos[i_up].y;
+                tex_du_v = grid->u_coords[i] - grid->u_coords[i_up];
+                tex_dv = grid->v_coords[i] - grid->v_coords[i_up];
+            }
+
+            // Compute screen distance for each grid direction
+            float screen_dist_u = sqrtf(screen_dx_u * screen_dx_u + screen_dy_u * screen_dy_u);
+            float screen_dist_v = sqrtf(screen_dx_v * screen_dx_v + screen_dy_v * screen_dy_v);
+            float tex_dist_u = sqrtf(tex_du * tex_du + tex_dv_u * tex_dv_u);
+            float tex_dist_v = sqrtf(tex_du_v * tex_du_v + tex_dv * tex_dv);
+
+            // Compute texture change per pixel along each grid direction
+            // These are the filter widths in texture space per pixel of screen movement
+            float filter_u = 0.0f, filter_v = 0.0f;
+
+            // At singularities (like sphere poles), screen distance becomes tiny
+            // while texture distance stays large. This indicates extreme compression
+            // requiring maximum filtering. Use a small epsilon and clamp to max filter.
+            const float min_screen_dist = 0.5f;  // Half a pixel minimum
+            const float max_filter = 1.0f;       // Entire texture = max mip level
+
+            if (screen_dist_u > min_screen_dist) {
+                filter_u = tex_dist_u / screen_dist_u;
+            } else if (tex_dist_u > 0.001f) {
+                // Screen converges but texture doesn't - extreme compression at pole
+                filter_u = max_filter;
+            }
+
+            if (screen_dist_v > min_screen_dist) {
+                filter_v = tex_dist_v / screen_dist_v;
+            } else if (tex_dist_v > 0.001f) {
+                // Screen converges but texture doesn't - extreme compression
+                filter_v = max_filter;
+            }
+
+            // Maximum filter width determines mip level
+            float filter_width = fmaxf(filter_u, filter_v);
 
             // --- Execute Shader ---
             RhShaderContext ctx;
-            ctx.P = pos_cam;
-            ctx.N = norm_cam;
-            ctx.I = pos_cam;
+            ctx.P = cam_positions[i];
+            ctx.N = cam_normals[i];
+            ctx.I = cam_positions[i];
             ctx.Cs = cur_col;
             ctx.Os = (RhColor){1,1,1};
             ctx.light_list = cam_lights;
@@ -1424,9 +1507,10 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             ctx.u = grid->u_coords[i];
             ctx.v = grid->v_coords[i];
 
-            // Texture coordinate derivatives (parametric spacing per grid cell)
-            ctx.du = (p->u_max - p->u_min) / (RhFloat)(gridSize - 1);
-            ctx.dv = (p->v_max - p->v_min) / (RhFloat)(gridSize - 1);
+            // Pass the maximum filter width as both du and dv
+            // The texture sampler will use max(du,dv) anyway
+            ctx.du = filter_width;
+            ctx.dv = filter_width;
 
             if (item->shader) {
                 item->shader(&ctx, item->shader_params);
@@ -1435,14 +1519,14 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
                 ctx.Oi = ctx.Os;  // Default: pass through opacity
             }
 
-            // Raster coords (use supersampled resolution)
-            float rx = (pos_ndc.x + 1.0f) * 0.5f * g_ctx->ss_xres;
-            float ry = (1.0f - (pos_ndc.y + 1.0f) * 0.5f) * g_ctx->ss_yres;
-
             grid->colors[i] = ctx.Ci;
             grid->opacities[i] = ctx.Oi;
-            grid->positions[i] = rh_vec3_create(rx, ry, pos_ndc.z);
+            grid->positions[i] = screen_pos[i];
         }
+
+        free(screen_pos);
+        free(cam_positions);
+        free(cam_normals);
 
         // Convert grid to micropolygons instead of direct rasterization
         ri_grid_to_mpolys(grid, out_mpolys, mode);

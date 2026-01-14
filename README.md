@@ -1,6 +1,6 @@
 # Rhayes: REYES-style Software Renderer in C
 
-![Image created by work in progress, January 13, 2026](images/20260113.png)
+![Image created by work in progress, January 14, 2026](images/20260114.png)
 
 ## What is this all about?
 
@@ -90,11 +90,14 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
     - Polygons and Polyline support.
 - **Basis Matrices**: Support for `RiBasis` (Bezier, B-Spline, Catmull-Rom, etc.).
 - **Shading & Lighting**:
-    - Surface shaders: `matte`, `plastic`, `metal`, and diagnostic shaders (`random`, `randomgrid`).
+    - Surface shaders: `matte`, `plastic`, `metal`, `paintedplastic` (textured), and diagnostic shaders (`random`, `randomgrid`).
     - Light sources: Point and Distant lights.
-- **Texture Support** (in progress):
+- **Texture Mapping**:
     - PNG texture loading with automatic mipmap generation.
     - Box-filter decimation for mipmap pyramid.
+    - Bilinear texture sampling with automatic mip level selection.
+    - Screen-space texture derivatives for proper filtering at all orientations.
+    - Correct handling of parametric singularities (e.g., sphere poles).
     - Support for grayscale, RGB, and RGBA textures.
 - **RIB Support**:
     - RIB parser for scene description.
@@ -157,8 +160,10 @@ make test
 ## Work in Progress
 
 Current development focus:
-- **Texture Mapping**: Texture loading infrastructure is complete (PNG loading with mipmap generation). Next steps: integrate texture sampling into shaders via u/v coordinates, implement filtering modes (nearest, bilinear, trilinear).
-- **Shader Enhancements**: The `paintedplastic` and `shinymetal` shaders have placeholder texture fields ready for integration.
+- **Additional Shaders**: Extend texture support to `shinymetal` and other shaders.
+- **Trilinear Filtering**: Add interpolation between mip levels for smoother LOD transitions.
+- **Displacement Mapping**: Support for procedural and texture-based surface displacement.
+- **Motion Blur**: Implement motion blur via temporal sampling.
 
 ## License
 MIT License.
