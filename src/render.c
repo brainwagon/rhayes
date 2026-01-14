@@ -53,6 +53,21 @@ static void render_DepthOfField(RtFloat fstop, RtFloat focal, RtFloat dist) {
     RiDepthOfField(fstop, focal, dist);
 }
 
+static void render_ShadingRate(RtFloat size) {
+    RiShadingRate(size);
+}
+
+static void render_Option(RtToken name, RtToken* tokens, RtPointer* values, int count) {
+    // Build varargs-style call to RiOption
+    if (count == 0) {
+        RiOption(name, RI_NULL);
+    } else if (count == 1) {
+        RiOption(name, tokens[0], values[0], RI_NULL);
+    } else if (count >= 2) {
+        RiOption(name, tokens[0], values[0], tokens[1], values[1], RI_NULL);
+    }
+}
+
 static void render_AttributeBegin(void) {
     RiAttributeBegin();
 }
@@ -248,6 +263,8 @@ RiCallbacks ri_render_callbacks = {
     .PixelSamples = render_PixelSamples,
     .PixelFilter = render_PixelFilter,
     .DepthOfField = render_DepthOfField,
+    .ShadingRate = render_ShadingRate,
+    .Option = render_Option,
     .AttributeBegin = render_AttributeBegin,
     .AttributeEnd = render_AttributeEnd,
     .TransformBegin = render_TransformBegin,

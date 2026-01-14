@@ -18,6 +18,8 @@ typedef struct RiCallbacks {
     void (*PixelSamples)(RtFloat xsamples, RtFloat ysamples);
     void (*PixelFilter)(RtToken filtername, RtFloat xwidth, RtFloat ywidth);
     void (*DepthOfField)(RtFloat fstop, RtFloat focallength, RtFloat focaldistance);
+    void (*ShadingRate)(RtFloat size);
+    void (*Option)(RtToken name, RtToken *tokens, RtPointer *values, int count);
 
     // Graphics State
     void (*AttributeBegin)(void);

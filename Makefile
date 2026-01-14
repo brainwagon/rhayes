@@ -29,8 +29,8 @@ CATRIB = $(BIN_DIR)/catrib
 
 .PHONY: all clean libs programs test test-clean generate-refs
 
-# Default target - build legacy executable
-all: $(TARGET)
+# Default target - build all executables
+all: $(TARGET) $(RENDER) $(CATRIB)
 
 # Build all libraries
 libs: $(LIBRH) $(LIBRI)

@@ -200,6 +200,20 @@ static void ribout_DepthOfField(RtFloat fstop, RtFloat focallength, RtFloat foca
     fprintf(g_rib_ctx->output, "DepthOfField %g %g %g\n", fstop, focallength, focaldistance);
 }
 
+static void ribout_ShadingRate(RtFloat size) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "ShadingRate %g\n", size);
+}
+
+static void ribout_Option(RtToken name, RtToken* tokens, RtPointer* values, int count) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "Option \"%s\"", name ? name : "");
+    write_params(tokens, values, count);
+    fprintf(g_rib_ctx->output, "\n");
+}
+
 static void ribout_AttributeBegin(void) {
     if (!g_rib_ctx || !g_rib_ctx->output) return;
     write_indent();
@@ -505,6 +519,8 @@ RiCallbacks ri_output_callbacks = {
     .PixelSamples = ribout_PixelSamples,
     .PixelFilter = ribout_PixelFilter,
     .DepthOfField = ribout_DepthOfField,
+    .ShadingRate = ribout_ShadingRate,
+    .Option = ribout_Option,
     .AttributeBegin = ribout_AttributeBegin,
     .AttributeEnd = ribout_AttributeEnd,
     .TransformBegin = ribout_TransformBegin,
