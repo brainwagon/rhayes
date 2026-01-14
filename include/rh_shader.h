@@ -73,7 +73,8 @@ typedef struct {
     float Ks;
     float roughness;
     RhColor specular_color;
-    char texturename[256];  // Placeholder for texture mapping (not implemented yet)
+    char texturename[256];  // Path to texture file
+    void* texture;          // Cached RhTexture pointer (set by RiSurface)
 } RhPaintedPlasticParams;
 
 typedef struct {

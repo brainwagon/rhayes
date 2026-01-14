@@ -15,8 +15,11 @@ RhMicroGrid* rh_grid_create(int width, int height) {
     g->colors = (RhColor*)malloc(count * sizeof(RhColor));
     g->opacities = (RhColor*)malloc(count * sizeof(RhColor));
     g->normals = (RhVec3*)malloc(count * sizeof(RhVec3));
+    g->u_coords = (RhFloat*)malloc(count * sizeof(RhFloat));
+    g->v_coords = (RhFloat*)malloc(count * sizeof(RhFloat));
 
-    if (!g->positions || !g->colors || !g->opacities || !g->normals) {
+    if (!g->positions || !g->colors || !g->opacities || !g->normals ||
+        !g->u_coords || !g->v_coords) {
         rh_grid_destroy(g);
         return NULL;
     }
@@ -29,6 +32,8 @@ void rh_grid_destroy(RhMicroGrid* g) {
         if (g->colors) free(g->colors);
         if (g->opacities) free(g->opacities);
         if (g->normals) free(g->normals);
+        if (g->u_coords) free(g->u_coords);
+        if (g->v_coords) free(g->v_coords);
         free(g);
     }
 }
@@ -790,7 +795,9 @@ void rh_prim_dice(const RhPrimitive* p, int u_res, int v_res, RhMicroGrid* grid)
             int idx = j * grid->width + i;
             grid->positions[idx] = pos;
             grid->normals[idx] = norm;
-            
+            grid->u_coords[idx] = u;
+            grid->v_coords[idx] = v;
+
             // Default color (white)
             grid->colors[idx] = (RhColor){1.0f, 1.0f, 1.0f};
         }

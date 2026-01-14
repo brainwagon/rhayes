@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 /* Helper: convert RhTextureFormat to LodePNGColorType */
 static LodePNGColorType format_to_lodepng(RhTextureFormat format) {
@@ -228,4 +229,87 @@ void rh_texture_get_texel(const RhTexture* tex, unsigned int level,
 
     unsigned int idx = ((unsigned int)y * mip->width + (unsigned int)x) * tex->channels;
     memcpy(out, &mip->data[idx], tex->channels);
+}
+
+RhColor rh_texture_sample_bilinear(const RhTexture* tex, unsigned int level,
+                                   float u, float v) {
+    RhColor result = {0, 0, 0};
+    if (!tex || !tex->levels) return result;
+
+    /* Clamp mip level */
+    if (level >= tex->num_levels) level = tex->num_levels - 1;
+
+    const RhMipLevel* mip = &tex->levels[level];
+
+    /* Wrap coordinates to [0,1] (repeat mode) */
+    u = u - floorf(u);
+    v = v - floorf(v);
+
+    /* Convert to texel coordinates */
+    float fx = u * (float)(mip->width - 1);
+    float fy = v * (float)(mip->height - 1);
+
+    int x0 = (int)floorf(fx);
+    int y0 = (int)floorf(fy);
+    int x1 = x0 + 1;
+    int y1 = y0 + 1;
+
+    /* Clamp to texture bounds */
+    if (x1 >= (int)mip->width) x1 = (int)mip->width - 1;
+    if (y1 >= (int)mip->height) y1 = (int)mip->height - 1;
+
+    /* Fractional parts for interpolation */
+    float tx = fx - (float)x0;
+    float ty = fy - (float)y0;
+
+    /* Fetch four texels */
+    unsigned char c00[4], c10[4], c01[4], c11[4];
+    rh_texture_get_texel(tex, level, x0, y0, c00);
+    rh_texture_get_texel(tex, level, x1, y0, c10);
+    rh_texture_get_texel(tex, level, x0, y1, c01);
+    rh_texture_get_texel(tex, level, x1, y1, c11);
+
+    /* Bilinear interpolation for each channel */
+    float r_top = (float)c00[0] * (1.0f - tx) + (float)c10[0] * tx;
+    float r_bot = (float)c01[0] * (1.0f - tx) + (float)c11[0] * tx;
+    float r_val = r_top * (1.0f - ty) + r_bot * ty;
+    result.r = r_val / 255.0f;
+
+    if (tex->channels >= 3) {
+        float g_top = (float)c00[1] * (1.0f - tx) + (float)c10[1] * tx;
+        float g_bot = (float)c01[1] * (1.0f - tx) + (float)c11[1] * tx;
+        float g_val = g_top * (1.0f - ty) + g_bot * ty;
+        result.g = g_val / 255.0f;
+
+        float b_top = (float)c00[2] * (1.0f - tx) + (float)c10[2] * tx;
+        float b_bot = (float)c01[2] * (1.0f - tx) + (float)c11[2] * tx;
+        float b_val = b_top * (1.0f - ty) + b_bot * ty;
+        result.b = b_val / 255.0f;
+    } else {
+        /* Grayscale: replicate to all channels */
+        result.g = result.r;
+        result.b = result.r;
+    }
+
+    return result;
+}
+
+RhColor rh_texture_sample(const RhTexture* tex, float u, float v,
+                          float du, float dv) {
+    if (!tex) return (RhColor){1.0f, 0.0f, 1.0f}; /* Magenta for missing texture */
+
+    /* Calculate filter width and mip level */
+    float filter_width = fmaxf(fabsf(du), fabsf(dv));
+    float max_dim = fmaxf((float)tex->base_width, (float)tex->base_height);
+    float texel_coverage = filter_width * max_dim;
+
+    float mip_float = log2f(fmaxf(1.0f, texel_coverage));
+    int level = (int)floorf(mip_float);
+
+    /* Clamp to valid range */
+    if (level < 0) level = 0;
+    if (level >= (int)tex->num_levels) level = (int)tex->num_levels - 1;
+
+    /* Sample at computed mip level (no trilinear for now) */
+    return rh_texture_sample_bilinear(tex, (unsigned int)level, u, v);
 }

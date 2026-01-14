@@ -1,4 +1,5 @@
 #include "rh_shader.h"
+#include "rh_texture.h"
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -241,7 +242,6 @@ void rh_shader_surface_metal(RhShaderContext* ctx, void* params) {
 
 void rh_shader_surface_paintedplastic(RhShaderContext* ctx, void* params) {
     // Paintedplastic is like plastic but with texture-mapped surface color.
-    // Without texture mapping, we just use Cs as the surface color (fallback).
     RhPaintedPlasticParams* p = (RhPaintedPlasticParams*)params;
     float Ka = p ? p->Ka : 1.0f;
     float Kd = p ? p->Kd : 0.5f;
@@ -249,9 +249,14 @@ void rh_shader_surface_paintedplastic(RhShaderContext* ctx, void* params) {
     float r = p ? p->roughness : 0.1f;
     RhColor Cspec = p ? p->specular_color : (RhColor){1,1,1};
 
-    // In full implementation, we would sample texture here using ctx->u, ctx->v
-    // For now, just use Cs
-    RhColor surface_color = ctx->Cs;
+    // Sample texture if available, otherwise use Cs
+    RhColor surface_color;
+    if (p && p->texture) {
+        RhTexture* tex = (RhTexture*)p->texture;
+        surface_color = rh_texture_sample(tex, ctx->u, ctx->v, ctx->du, ctx->dv);
+    } else {
+        surface_color = ctx->Cs;
+    }
 
     RhColor ambient = {0,0,0};
     RhColor diff = {0,0,0};

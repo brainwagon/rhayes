@@ -14,6 +14,8 @@ typedef struct {
     RhColor* colors;    // Shaded colors (Ci - premultiplied)
     RhColor* opacities; // Shaded opacities (Oi)
     RhVec3* normals;
+    RhFloat* u_coords;  // Parametric u coordinates [0,1]
+    RhFloat* v_coords;  // Parametric v coordinates [0,1]
 } RhMicroGrid;
 
 RhMicroGrid* rh_grid_create(int width, int height);

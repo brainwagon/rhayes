@@ -9,6 +9,7 @@
 #include "rh_geometry.h"
 #include "rh_raster.h"
 #include "rh_shader.h"
+#include "rh_texture.h"
 #include "teapot_data.h"
 
 // --- Internal Types ---
@@ -1419,6 +1420,14 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             ctx.grid_ptr = (void*)(intptr_t)(g_ctx->grid_counter);
             ctx.vertex_index = i;
 
+            // Texture coordinates from grid
+            ctx.u = grid->u_coords[i];
+            ctx.v = grid->v_coords[i];
+
+            // Texture coordinate derivatives (parametric spacing per grid cell)
+            ctx.du = (p->u_max - p->u_min) / (RhFloat)(gridSize - 1);
+            ctx.dv = (p->v_max - p->v_min) / (RhFloat)(gridSize - 1);
+
             if (item->shader) {
                 item->shader(&ctx, item->shader_params);
             } else {
@@ -1610,7 +1619,58 @@ void RiSurface(RtToken name, ...) {
         curr()->current_shader_params = NULL;
     } else if (strcmp(name, "paintedplastic") == 0) {
         curr()->current_surface_shader = rh_shader_surface_paintedplastic;
-        curr()->current_shader_params = NULL;
+        // Parse paintedplastic parameters
+        RhPaintedPlasticParams* params = (RhPaintedPlasticParams*)malloc(sizeof(RhPaintedPlasticParams));
+        if (params) {
+            // Initialize defaults
+            params->Ka = 1.0f;
+            params->Kd = 0.5f;
+            params->Ks = 0.5f;
+            params->roughness = 0.1f;
+            params->specular_color = (RhColor){1.0f, 1.0f, 1.0f};
+            params->texturename[0] = '\0';
+            params->texture = NULL;
+
+            va_list ap;
+            va_start(ap, name);
+            RtToken token;
+            while ((token = va_arg(ap, RtToken)) != RI_NULL) {
+                if (strcmp(token, "texturename") == 0) {
+                    RtToken texname = va_arg(ap, RtToken);
+                    if (texname) {
+                        strncpy(params->texturename, texname, sizeof(params->texturename) - 1);
+                        params->texturename[sizeof(params->texturename) - 1] = '\0';
+                        // Load the texture
+                        params->texture = rh_texture_load(texname, RH_TEX_RGB);
+                        if (!params->texture) {
+                            fprintf(stderr, "Warning: Failed to load texture '%s'\n", texname);
+                        }
+                    }
+                } else if (strcmp(token, "Ka") == 0) {
+                    RtFloat* val = va_arg(ap, RtFloat*);
+                    params->Ka = *val;
+                } else if (strcmp(token, "Kd") == 0) {
+                    RtFloat* val = va_arg(ap, RtFloat*);
+                    params->Kd = *val;
+                } else if (strcmp(token, "Ks") == 0) {
+                    RtFloat* val = va_arg(ap, RtFloat*);
+                    params->Ks = *val;
+                } else if (strcmp(token, "roughness") == 0) {
+                    RtFloat* val = va_arg(ap, RtFloat*);
+                    params->roughness = *val;
+                } else if (strcmp(token, "specularcolor") == 0) {
+                    RtColor* col = va_arg(ap, RtColor*);
+                    params->specular_color.r = (*col)[0];
+                    params->specular_color.g = (*col)[1];
+                    params->specular_color.b = (*col)[2];
+                }
+            }
+            va_end(ap);
+            curr()->current_shader_params = params;
+        } else {
+            curr()->current_shader_params = NULL;
+        }
+        return;  // Already consumed varargs
     } else if (strcmp(name, "shinymetal") == 0) {
         curr()->current_surface_shader = rh_shader_surface_shinymetal;
         curr()->current_shader_params = NULL;

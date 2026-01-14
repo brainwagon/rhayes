@@ -97,18 +97,19 @@ int main(int argc, char** argv) {
                 RiGeometry("teapot", RI_NULL);
             RiTransformEnd();
 
-            // --- Diagnostic Shader Demo: Spheres ---
-            // Sphere with randomgrid shader (each grid gets a unique color)
+            // --- Shader Demo: Spheres ---
+            // Sphere with paintedplastic shader and texture
             RiTransformBegin();
                 RiTranslate(-2.5f, 1.0f, -2.0f);
-                RiSurface("randomgrid", RI_NULL);
+                RiColor((RtColor){1.0f, 1.0f, 1.0f});  // White base (texture provides color)
+                RiSurface("paintedplastic", "texturename", "textures/checker.png", RI_NULL);
                 RiSphere(0.8f, -0.8f, 0.8f, 360.0f, RI_NULL);
             RiTransformEnd();
 
-            // Sphere with random shader (each micropolygon gets a unique color)
+            // Sphere with randomgrid shader (diagnostic)
             RiTransformBegin();
                 RiTranslate(2.5f, 1.0f, -2.0f);
-                RiSurface("random", RI_NULL);
+                RiSurface("randomgrid", RI_NULL);
                 RiSphere(0.8f, -0.8f, 0.8f, 360.0f, RI_NULL);
             RiTransformEnd();
 

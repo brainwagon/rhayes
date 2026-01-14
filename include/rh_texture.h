@@ -2,6 +2,7 @@
 #define RH_TEXTURE_H
 
 #include "rh_config.h"
+#include "rh_image.h"  /* For RhColor */
 
 /**
  * Texture channel format specifier.
@@ -69,5 +70,30 @@ unsigned int rh_texture_mip_count(unsigned int width, unsigned int height);
  */
 void rh_texture_get_texel(const RhTexture* tex, unsigned int level,
                           int x, int y, unsigned char* out);
+
+/**
+ * Sample texture with bilinear filtering at specified mip level.
+ *
+ * @param tex    Texture to sample
+ * @param level  Mip level (0 = full resolution, clamped to valid range)
+ * @param u      Normalized u coordinate [0,1] (wrapped to repeat)
+ * @param v      Normalized v coordinate [0,1] (wrapped to repeat)
+ * @return       Interpolated color (RGB)
+ */
+RhColor rh_texture_sample_bilinear(const RhTexture* tex, unsigned int level,
+                                   float u, float v);
+
+/**
+ * Sample texture with automatic mip level selection based on derivatives.
+ *
+ * @param tex    Texture to sample
+ * @param u      Normalized u coordinate [0,1]
+ * @param v      Normalized v coordinate [0,1]
+ * @param du     Derivative of u (filter width in u direction)
+ * @param dv     Derivative of v (filter width in v direction)
+ * @return       Filtered color
+ */
+RhColor rh_texture_sample(const RhTexture* tex, float u, float v,
+                          float du, float dv);
 
 #endif /* RH_TEXTURE_H */
