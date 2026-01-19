@@ -38,6 +38,15 @@ void RiEnd(void);
 RtPointer RiGetContext(void);
 void RiContext(RtPointer ctx);
 
+// Variable declarations
+// Associates a token with a type and storage class for parameter list parsing.
+// declaration format: "[class] [type] ['[' n ']']"
+// class: constant, uniform, varying, vertex (default: uniform)
+// type: float, integer, string, color, point, vector, normal, hpoint, matrix (default: float)
+// Example: RiDeclare("temperature", "vertex float");
+//          RiDeclare("Cs", "varying color");
+RtToken RiDeclare(const char* name, const char* declaration);
+
 // 2. Options (Scene Description)
 void RiOption(RtToken name, ...);
 void RiFormat(RtInt xresolution, RtInt yresolution, RtFloat pixelaspectratio);
@@ -99,6 +108,7 @@ void RiGeometry(RtToken type, ...);
 
 // Surface
 void RiSurface(RtToken name, ...);
+void RiSurfaceV(RtToken name, RtToken* tokens, RtPointer* values, int count);
 
 // 8. Lighting
 RtToken RiLightSource(RtToken name, ...);

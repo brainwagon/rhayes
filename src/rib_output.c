@@ -79,6 +79,12 @@ static void write_params(RtToken* tokens, RtPointer* values, int count) {
             // 3-float array (point or color)
             float* fvals = (float*)values[i];
             write_float_array(fvals, 3);
+        } else if (strcmp(token, "texturename") == 0 ||
+                   strcmp(token, "mapname") == 0 ||
+                   strcmp(token, "filename") == 0) {
+            // String parameter
+            const char* sval = (const char*)values[i];
+            fprintf(g_rib_ctx->output, "\"%s\"", sval ? sval : "");
         } else {
             // Default: assume single float
             float* fval = (float*)values[i];
@@ -158,6 +164,12 @@ static void ribout_Begin(RtToken name) {
 
 static void ribout_End(void) {
     // Nothing to output for RiEnd - cleanup happens in rib_output_end()
+}
+
+static void ribout_Declare(const char* name, const char* declaration) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "Declare \"%s\" \"%s\"\n", name, declaration);
 }
 
 static void ribout_Format(RtInt xres, RtInt yres, RtFloat aspect) {
@@ -513,6 +525,7 @@ static void ribout_ObjectInstance(RtInt handle) {
 RiCallbacks ri_output_callbacks = {
     .Begin = ribout_Begin,
     .End = ribout_End,
+    .Declare = ribout_Declare,
     .Format = ribout_Format,
     .Display = ribout_Display,
     .Projection = ribout_Projection,

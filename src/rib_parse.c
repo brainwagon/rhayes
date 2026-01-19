@@ -492,7 +492,9 @@ static int parse_Surface(RibParser* p) {
     RtToken tokens[MAX_PARAMS];
     RtPointer values[MAX_PARAMS];
     float param_values[MAX_PARAMS];
+    char* string_values[MAX_PARAMS];
     int param_count = 0;
+    int string_count = 0;
 
     while (p->current_token.type == TOK_STRING) {
         tokens[param_count] = strdup(p->current_token.value.string);
@@ -501,6 +503,11 @@ static int parse_Surface(RibParser* p) {
         if (p->current_token.type == TOK_NUMBER) {
             param_values[param_count] = (float)p->current_token.value.number;
             values[param_count] = &param_values[param_count];
+            next_token(p);
+        } else if (p->current_token.type == TOK_STRING) {
+            string_values[string_count] = strdup(p->current_token.value.string);
+            values[param_count] = string_values[string_count];
+            string_count++;
             next_token(p);
         }
         param_count++;
@@ -511,6 +518,9 @@ static int parse_Surface(RibParser* p) {
 
     for (int i = 0; i < param_count; i++) {
         free(tokens[i]);
+    }
+    for (int i = 0; i < string_count; i++) {
+        free(string_values[i]);
     }
     return 0;
 }
@@ -782,6 +792,16 @@ static int cmd_TransformEnd(RibParser* p) { p->callbacks->TransformEnd(); return
 static int cmd_Identity(RibParser* p) { p->callbacks->Identity(); return 0; }
 static int cmd_ObjectEnd(RibParser* p) { p->callbacks->ObjectEnd(); return 0; }
 
+static int parse_Declare(RibParser* p) {
+    char name[64], declaration[256];
+    if (expect_string(p, name, sizeof(name)) < 0) return -1;
+    if (expect_string(p, declaration, sizeof(declaration)) < 0) return -1;
+    if (p->callbacks->Declare) {
+        p->callbacks->Declare(name, declaration);
+    }
+    return 0;
+}
+
 static const CommandEntry commands[] = {
     {"AttributeBegin", cmd_AttributeBegin},
     {"AttributeEnd", cmd_AttributeEnd},
@@ -790,6 +810,7 @@ static const CommandEntry commands[] = {
     {"ConcatTransform", parse_ConcatTransform},
     {"Cone", parse_Cone},
     {"Cylinder", parse_Cylinder},
+    {"Declare", parse_Declare},
     {"DepthOfField", parse_DepthOfField},
     {"Disk", parse_Disk},
     {"Display", parse_Display},

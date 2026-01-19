@@ -17,6 +17,10 @@ static void render_End(void) {
     RiEnd();
 }
 
+static void render_Declare(const char* name, const char* declaration) {
+    RiDeclare(name, declaration);
+}
+
 static void render_Format(RtInt xres, RtInt yres, RtFloat aspect) {
     RiFormat(xres, yres, aspect);
 }
@@ -138,8 +142,7 @@ static void render_Opacity(RtColor opacity) {
 }
 
 static void render_Surface(RtToken name, RtToken* tokens, RtPointer* values, int count) {
-    (void)tokens; (void)values; (void)count;
-    RiSurface(name, RI_NULL);
+    RiSurfaceV(name, tokens, values, count);
 }
 
 static void render_WorldBegin(void) {
@@ -257,6 +260,7 @@ static void render_ObjectInstance(RtInt handle) {
 RiCallbacks ri_render_callbacks = {
     .Begin = render_Begin,
     .End = render_End,
+    .Declare = render_Declare,
     .Format = render_Format,
     .Display = render_Display,
     .Projection = render_Projection,

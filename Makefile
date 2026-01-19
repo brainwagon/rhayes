@@ -26,17 +26,18 @@ LIBRIBPARSE = $(LIB_DIR)/libribparse.a
 TARGET = rhayes
 RENDER = $(BIN_DIR)/render
 CATRIB = $(BIN_DIR)/catrib
+SCENE2RIB = $(BIN_DIR)/scene2rib
 
 .PHONY: all clean libs programs test test-clean generate-refs
 
 # Default target - build all executables
-all: $(TARGET) $(RENDER) $(CATRIB)
+all: $(TARGET) $(RENDER) $(CATRIB) $(SCENE2RIB)
 
 # Build all libraries
 libs: $(LIBRH) $(LIBRI)
 
 # Build all programs (requires all new files to exist)
-programs: $(RENDER) $(CATRIB)
+programs: $(RENDER) $(CATRIB) $(SCENE2RIB)
 
 # Core rendering library (geometry, shading, rasterization, math, image)
 $(LIBRH): $(LIBRH_OBJS) | $(LIB_DIR)
@@ -64,6 +65,10 @@ $(RENDER): $(OBJ_DIR)/render.o $(LIBRIBPARSE) $(LIBRI) $(LIBRH) | $(BIN_DIR)
 
 # Catrib program (parse RIB and write RIB)
 $(CATRIB): $(OBJ_DIR)/catrib.o $(LIBRIBPARSE) $(LIBRIB) | $(BIN_DIR)
+	$(CC) $^ -o $@ $(LDFLAGS)
+
+# Scene2rib program (output main.c scene as RIB)
+$(SCENE2RIB): $(OBJ_DIR)/main_rib.o $(LIBRIB) | $(BIN_DIR)
 	$(CC) $^ -o $@ $(LDFLAGS)
 
 # Compile source files into object files

@@ -68,6 +68,39 @@ RtMatrix RiPowerBasis = {
     { 0,  0,  0,  1}
 };
 
+// --- Variable Declaration Types (RiDeclare) ---
+
+// Storage classes (interpolation modes)
+typedef enum {
+    RI_CLASS_CONSTANT,   // One value per primitive
+    RI_CLASS_UNIFORM,    // One value per face/patch
+    RI_CLASS_VARYING,    // One value per parametric corner (bilinear interpolation)
+    RI_CLASS_VERTEX      // One value per control vertex (basis interpolation)
+} RiStorageClass;
+
+// Variable data types
+typedef enum {
+    RI_TYPE_FLOAT,       // 1 component
+    RI_TYPE_INTEGER,     // 1 component
+    RI_TYPE_STRING,      // 1 component (pointer)
+    RI_TYPE_COLOR,       // 3 components
+    RI_TYPE_POINT,       // 3 components
+    RI_TYPE_VECTOR,      // 3 components
+    RI_TYPE_NORMAL,      // 3 components
+    RI_TYPE_HPOINT,      // 4 components (homogeneous)
+    RI_TYPE_MATRIX       // 16 components
+} RiVarType;
+
+// Variable declaration entry
+typedef struct {
+    char name[64];           // Token name (e.g., "temperature")
+    RiStorageClass sclass;   // Storage class
+    RiVarType type;          // Data type
+    int array_size;          // Array count (1 for non-arrays)
+} RiDeclaration;
+
+#define MAX_DECLARATIONS 256
+
 typedef struct {
     RhPrimitive prim;
     RhMat4 transform; // CTM at creation
@@ -212,6 +245,10 @@ typedef struct {
         char filename[256];         // Text output file (empty = stderr)
         char jsonfilename[256];     // JSON output file (empty = none)
     } stats_options;
+
+    // Variable declarations (RiDeclare)
+    RiDeclaration declarations[MAX_DECLARATIONS];
+    int num_declarations;
 } RiContextData;
 
 static RiContextData* g_ctx = NULL;
@@ -220,6 +257,8 @@ static RiContextData* g_ctx = NULL;
 static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropolygonList* out_mpolys, RhShadingMode mode);
 static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, const RhColor* color);
 static void ri_add_geometry(RhPrimitive* p);
+static void ri_install_standard_declarations(void);
+static void ri_add_declaration(const char* name, RiStorageClass sclass, RiVarType type, int array_size);
 
 static RiAttributeState* curr() {
     return &g_ctx->stack[g_ctx->stack_ptr];
@@ -678,6 +717,10 @@ void RiBegin(RtToken name) {
     g_ctx->dof_focallength = 1.0f;
     g_ctx->dof_focaldistance = 1.0f;
 
+    // Initialize variable declaration table with standard declarations
+    g_ctx->num_declarations = 0;
+    ri_install_standard_declarations();
+
     (void)name;
 }
 
@@ -708,6 +751,211 @@ RtPointer RiGetContext(void) {
 
 void RiContext(RtPointer ctx) {
     g_ctx = (RiContextData*)ctx;
+}
+
+// --- Variable Declaration (RiDeclare) ---
+
+// Helper to parse storage class from string
+static RiStorageClass ri_parse_storage_class(const char* str) {
+    if (strcmp(str, "constant") == 0) return RI_CLASS_CONSTANT;
+    if (strcmp(str, "uniform") == 0) return RI_CLASS_UNIFORM;
+    if (strcmp(str, "varying") == 0) return RI_CLASS_VARYING;
+    if (strcmp(str, "vertex") == 0) return RI_CLASS_VERTEX;
+    return RI_CLASS_UNIFORM;  // Default
+}
+
+// Helper to parse variable type from string
+static RiVarType ri_parse_var_type(const char* str) {
+    if (strcmp(str, "float") == 0) return RI_TYPE_FLOAT;
+    if (strcmp(str, "integer") == 0) return RI_TYPE_INTEGER;
+    if (strcmp(str, "string") == 0) return RI_TYPE_STRING;
+    if (strcmp(str, "color") == 0) return RI_TYPE_COLOR;
+    if (strcmp(str, "point") == 0) return RI_TYPE_POINT;
+    if (strcmp(str, "vector") == 0) return RI_TYPE_VECTOR;
+    if (strcmp(str, "normal") == 0) return RI_TYPE_NORMAL;
+    if (strcmp(str, "hpoint") == 0) return RI_TYPE_HPOINT;
+    if (strcmp(str, "matrix") == 0) return RI_TYPE_MATRIX;
+    return RI_TYPE_FLOAT;  // Default
+}
+
+// Get component count for a given type
+static int ri_type_component_count(RiVarType type) {
+    switch (type) {
+        case RI_TYPE_FLOAT:   return 1;
+        case RI_TYPE_INTEGER: return 1;
+        case RI_TYPE_STRING:  return 1;
+        case RI_TYPE_COLOR:   return 3;
+        case RI_TYPE_POINT:   return 3;
+        case RI_TYPE_VECTOR:  return 3;
+        case RI_TYPE_NORMAL:  return 3;
+        case RI_TYPE_HPOINT:  return 4;
+        case RI_TYPE_MATRIX:  return 16;
+        default:              return 1;
+    }
+}
+
+// Internal helper to add a declaration
+static void ri_add_declaration(const char* name, RiStorageClass sclass, RiVarType type, int array_size) {
+    if (!g_ctx || g_ctx->num_declarations >= MAX_DECLARATIONS) return;
+
+    // Check if already declared (update existing)
+    for (int i = 0; i < g_ctx->num_declarations; i++) {
+        if (strcmp(g_ctx->declarations[i].name, name) == 0) {
+            g_ctx->declarations[i].sclass = sclass;
+            g_ctx->declarations[i].type = type;
+            g_ctx->declarations[i].array_size = array_size;
+            return;
+        }
+    }
+
+    // Add new declaration
+    RiDeclaration* decl = &g_ctx->declarations[g_ctx->num_declarations++];
+    strncpy(decl->name, name, sizeof(decl->name) - 1);
+    decl->name[sizeof(decl->name) - 1] = '\0';
+    decl->sclass = sclass;
+    decl->type = type;
+    decl->array_size = array_size;
+}
+
+// Install predefined standard variable declarations
+static void ri_install_standard_declarations(void) {
+    if (!g_ctx) return;
+
+    // Position variables (Table 5.1 from RISpec)
+    ri_add_declaration("P", RI_CLASS_VERTEX, RI_TYPE_POINT, 1);
+    ri_add_declaration("Pz", RI_CLASS_VERTEX, RI_TYPE_POINT, 1);  // Actually 1 float, but encoded as point
+    ri_add_declaration("Pw", RI_CLASS_VERTEX, RI_TYPE_HPOINT, 1);
+
+    // Normal variables
+    ri_add_declaration("N", RI_CLASS_VARYING, RI_TYPE_NORMAL, 1);
+    ri_add_declaration("Np", RI_CLASS_UNIFORM, RI_TYPE_NORMAL, 1);
+
+    // Color and opacity
+    ri_add_declaration("Cs", RI_CLASS_VARYING, RI_TYPE_COLOR, 1);
+    ri_add_declaration("Os", RI_CLASS_VARYING, RI_TYPE_COLOR, 1);
+
+    // Texture coordinates
+    ri_add_declaration("s", RI_CLASS_VARYING, RI_TYPE_FLOAT, 1);
+    ri_add_declaration("t", RI_CLASS_VARYING, RI_TYPE_FLOAT, 1);
+    ri_add_declaration("st", RI_CLASS_VARYING, RI_TYPE_FLOAT, 2);  // 2-float array
+
+    // Light parameters
+    ri_add_declaration("intensity", RI_CLASS_UNIFORM, RI_TYPE_FLOAT, 1);
+    ri_add_declaration("lightcolor", RI_CLASS_UNIFORM, RI_TYPE_COLOR, 1);
+    ri_add_declaration("from", RI_CLASS_UNIFORM, RI_TYPE_POINT, 1);
+    ri_add_declaration("to", RI_CLASS_UNIFORM, RI_TYPE_POINT, 1);
+
+    // Shader parameters
+    ri_add_declaration("Ka", RI_CLASS_UNIFORM, RI_TYPE_FLOAT, 1);
+    ri_add_declaration("Kd", RI_CLASS_UNIFORM, RI_TYPE_FLOAT, 1);
+    ri_add_declaration("Ks", RI_CLASS_UNIFORM, RI_TYPE_FLOAT, 1);
+    ri_add_declaration("roughness", RI_CLASS_UNIFORM, RI_TYPE_FLOAT, 1);
+    ri_add_declaration("specularcolor", RI_CLASS_UNIFORM, RI_TYPE_COLOR, 1);
+    ri_add_declaration("texturename", RI_CLASS_UNIFORM, RI_TYPE_STRING, 1);
+
+    // Spotlight parameters
+    ri_add_declaration("coneangle", RI_CLASS_UNIFORM, RI_TYPE_FLOAT, 1);
+    ri_add_declaration("conedeltaangle", RI_CLASS_UNIFORM, RI_TYPE_FLOAT, 1);
+    ri_add_declaration("beamdistribution", RI_CLASS_UNIFORM, RI_TYPE_FLOAT, 1);
+}
+
+RtToken RiDeclare(const char* name, const char* declaration) {
+    if (!g_ctx || !name || !declaration) return NULL;
+
+    // Parse declaration string: [class] [type] ['[' n ']']
+    // Examples: "varying float", "uniform point", "vertex float[3]"
+
+    char decl_copy[256];
+    strncpy(decl_copy, declaration, sizeof(decl_copy) - 1);
+    decl_copy[sizeof(decl_copy) - 1] = '\0';
+
+    RiStorageClass sclass = RI_CLASS_UNIFORM;  // Default storage class
+    RiVarType type = RI_TYPE_FLOAT;            // Default type
+    int array_size = 1;                        // Default: not an array
+
+    // Tokenize the declaration string
+    char* tokens[4];
+    int token_count = 0;
+    char* tok = strtok(decl_copy, " \t");
+    while (tok && token_count < 4) {
+        tokens[token_count++] = tok;
+        tok = strtok(NULL, " \t");
+    }
+
+    if (token_count == 0) {
+        // Empty declaration - use defaults
+    } else if (token_count == 1) {
+        // Just type (e.g., "float", "point")
+        // Check for array notation
+        char* bracket = strchr(tokens[0], '[');
+        if (bracket) {
+            *bracket = '\0';
+            array_size = atoi(bracket + 1);
+            if (array_size < 1) array_size = 1;
+        }
+        type = ri_parse_var_type(tokens[0]);
+    } else {
+        // Two or more tokens: [class] type [array]
+        // First token could be class or type
+        // Try parsing first token as class
+        if (strcmp(tokens[0], "constant") == 0 ||
+            strcmp(tokens[0], "uniform") == 0 ||
+            strcmp(tokens[0], "varying") == 0 ||
+            strcmp(tokens[0], "vertex") == 0) {
+            sclass = ri_parse_storage_class(tokens[0]);
+            // Second token is type
+            if (token_count >= 2) {
+                char* bracket = strchr(tokens[1], '[');
+                if (bracket) {
+                    *bracket = '\0';
+                    array_size = atoi(bracket + 1);
+                    if (array_size < 1) array_size = 1;
+                }
+                type = ri_parse_var_type(tokens[1]);
+            }
+        } else {
+            // First token is type
+            char* bracket = strchr(tokens[0], '[');
+            if (bracket) {
+                *bracket = '\0';
+                array_size = atoi(bracket + 1);
+                if (array_size < 1) array_size = 1;
+            }
+            type = ri_parse_var_type(tokens[0]);
+        }
+
+        // Check for separate array specification (e.g., "float" "[3]")
+        for (int i = 1; i < token_count; i++) {
+            if (tokens[i][0] == '[') {
+                array_size = atoi(tokens[i] + 1);
+                if (array_size < 1) array_size = 1;
+            }
+        }
+    }
+
+    // Add the declaration
+    ri_add_declaration(name, sclass, type, array_size);
+
+    // Return the name as the token (for chained usage)
+    return (RtToken)name;
+}
+
+// Lookup a declaration by name
+const RiDeclaration* ri_lookup_declaration(const char* name) {
+    if (!g_ctx || !name) return NULL;
+
+    for (int i = 0; i < g_ctx->num_declarations; i++) {
+        if (strcmp(g_ctx->declarations[i].name, name) == 0) {
+            return &g_ctx->declarations[i];
+        }
+    }
+    return NULL;
+}
+
+// Get total float count for a declaration (components * array_size)
+int ri_declaration_float_count(const RiDeclaration* decl) {
+    if (!decl) return 0;
+    return ri_type_component_count(decl->type) * decl->array_size;
 }
 
 // --- 2. Options ---
@@ -1699,7 +1947,7 @@ void RiGeometry(RtToken type, ...) {
     va_end(ap);
 }
 
-void RiSurface(RtToken name, ...) {
+void RiSurfaceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
     if (!g_ctx) return;
 
     if (strcmp(name, "plastic") == 0) {
@@ -1728,12 +1976,11 @@ void RiSurface(RtToken name, ...) {
             params->texturename[0] = '\0';
             params->texture = NULL;
 
-            va_list ap;
-            va_start(ap, name);
-            RtToken token;
-            while ((token = va_arg(ap, RtToken)) != RI_NULL) {
+            for (int i = 0; i < count; i++) {
+                RtToken token = tokens[i];
+                if (!token) break;
                 if (strcmp(token, "texturename") == 0) {
-                    RtToken texname = va_arg(ap, RtToken);
+                    RtToken texname = (RtToken)values[i];
                     if (texname) {
                         strncpy(params->texturename, texname, sizeof(params->texturename) - 1);
                         params->texturename[sizeof(params->texturename) - 1] = '\0';
@@ -1744,30 +1991,28 @@ void RiSurface(RtToken name, ...) {
                         }
                     }
                 } else if (strcmp(token, "Ka") == 0) {
-                    RtFloat* val = va_arg(ap, RtFloat*);
+                    RtFloat* val = (RtFloat*)values[i];
                     params->Ka = *val;
                 } else if (strcmp(token, "Kd") == 0) {
-                    RtFloat* val = va_arg(ap, RtFloat*);
+                    RtFloat* val = (RtFloat*)values[i];
                     params->Kd = *val;
                 } else if (strcmp(token, "Ks") == 0) {
-                    RtFloat* val = va_arg(ap, RtFloat*);
+                    RtFloat* val = (RtFloat*)values[i];
                     params->Ks = *val;
                 } else if (strcmp(token, "roughness") == 0) {
-                    RtFloat* val = va_arg(ap, RtFloat*);
+                    RtFloat* val = (RtFloat*)values[i];
                     params->roughness = *val;
                 } else if (strcmp(token, "specularcolor") == 0) {
-                    RtColor* col = va_arg(ap, RtColor*);
+                    RtColor* col = (RtColor*)values[i];
                     params->specular_color.r = (*col)[0];
                     params->specular_color.g = (*col)[1];
                     params->specular_color.b = (*col)[2];
                 }
             }
-            va_end(ap);
             curr()->current_shader_params = params;
         } else {
             curr()->current_shader_params = NULL;
         }
-        return;  // Already consumed varargs
     } else if (strcmp(name, "shinymetal") == 0) {
         curr()->current_surface_shader = rh_shader_surface_shinymetal;
         curr()->current_shader_params = NULL;
@@ -1778,9 +2023,26 @@ void RiSurface(RtToken name, ...) {
         curr()->current_surface_shader = rh_shader_surface_random;
         curr()->current_shader_params = NULL;
     }
+}
+
+void RiSurface(RtToken name, ...) {
+    if (!g_ctx) return;
+
+    // Build token/value arrays from varargs
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
 
     va_list ap;
     va_start(ap, name);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
     va_end(ap);
+
+    RiSurfaceV(name, tokens, values, count);
 }
 
