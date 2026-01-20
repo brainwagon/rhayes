@@ -340,6 +340,37 @@ static int parse_DepthOfField(RibParser* p) {
     return 0;
 }
 
+static int parse_Shutter(RibParser* p) {
+    double open, close;
+    if (expect_number(p, &open) < 0) return -1;
+    if (expect_number(p, &close) < 0) return -1;
+    if (p->callbacks->Shutter) {
+        p->callbacks->Shutter((RtFloat)open, (RtFloat)close);
+    }
+    return 0;
+}
+
+static int parse_MotionBegin(RibParser* p) {
+    // MotionBegin [t0 t1 ...]
+    int count;
+    if (read_float_array(p, &count) < 0) return -1;
+    if (count < 2) {
+        set_error(p, "MotionBegin requires at least 2 time values");
+        return -1;
+    }
+    if (p->callbacks->MotionBegin) {
+        p->callbacks->MotionBegin(count, p->float_array);
+    }
+    return 0;
+}
+
+static int cmd_MotionEnd(RibParser* p) {
+    if (p->callbacks->MotionEnd) {
+        p->callbacks->MotionEnd();
+    }
+    return 0;
+}
+
 static int parse_ShadingRate(RibParser* p) {
     double size;
     if (expect_number(p, &size) < 0) return -1;
@@ -820,6 +851,8 @@ static const CommandEntry commands[] = {
     {"Identity", cmd_Identity},
     {"Illuminate", parse_Illuminate},
     {"LightSource", parse_LightSource},
+    {"MotionBegin", parse_MotionBegin},
+    {"MotionEnd", cmd_MotionEnd},
     {"ObjectBegin", parse_ObjectBegin},
     {"ObjectEnd", cmd_ObjectEnd},
     {"ObjectInstance", parse_ObjectInstance},
@@ -834,6 +867,7 @@ static const CommandEntry commands[] = {
     {"Rotate", parse_Rotate},
     {"Scale", parse_Scale},
     {"ShadingRate", parse_ShadingRate},
+    {"Shutter", parse_Shutter},
     {"Sphere", parse_Sphere},
     {"Surface", parse_Surface},
     {"Torus", parse_Torus},

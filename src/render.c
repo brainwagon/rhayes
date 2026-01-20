@@ -30,11 +30,7 @@ static void render_Display(RtToken name, RtToken type, RtToken mode) {
 }
 
 static void render_Projection(RtToken name, RtToken* tokens, RtPointer* values, int count) {
-    if (count > 0 && tokens[0] && strcmp(tokens[0], "fov") == 0) {
-        RiProjection(name, "fov", values[0], RI_NULL);
-    } else {
-        RiProjection(name, RI_NULL);
-    }
+    RiProjectionV(name, tokens, values, count);
 }
 
 static void render_PixelSamples(RtFloat x, RtFloat y) {
@@ -57,19 +53,16 @@ static void render_DepthOfField(RtFloat fstop, RtFloat focal, RtFloat dist) {
     RiDepthOfField(fstop, focal, dist);
 }
 
+static void render_Shutter(RtFloat open, RtFloat close) {
+    RiShutter(open, close);
+}
+
 static void render_ShadingRate(RtFloat size) {
     RiShadingRate(size);
 }
 
 static void render_Option(RtToken name, RtToken* tokens, RtPointer* values, int count) {
-    // Build varargs-style call to RiOption
-    if (count == 0) {
-        RiOption(name, RI_NULL);
-    } else if (count == 1) {
-        RiOption(name, tokens[0], values[0], RI_NULL);
-    } else if (count >= 2) {
-        RiOption(name, tokens[0], values[0], tokens[1], values[1], RI_NULL);
-    }
+    RiOptionV(name, tokens, values, count);
 }
 
 static void render_AttributeBegin(void) {
@@ -86,6 +79,14 @@ static void render_TransformBegin(void) {
 
 static void render_TransformEnd(void) {
     RiTransformEnd();
+}
+
+static void render_MotionBegin(RtInt n, RtFloat* times) {
+    RiMotionBeginV(n, times);
+}
+
+static void render_MotionEnd(void) {
+    RiMotionEnd();
 }
 
 static void render_Identity(void) {
@@ -155,89 +156,54 @@ static void render_WorldEnd(void) {
 
 static void render_Sphere(RtFloat radius, RtFloat zmin, RtFloat zmax, RtFloat tmax,
                           RtToken* tokens, RtPointer* values, int count) {
-    (void)tokens; (void)values; (void)count;
-    RiSphere(radius, zmin, zmax, tmax, RI_NULL);
+    RiSphereV(radius, zmin, zmax, tmax, tokens, values, count);
 }
 
 static void render_Cylinder(RtFloat radius, RtFloat zmin, RtFloat zmax, RtFloat tmax,
                             RtToken* tokens, RtPointer* values, int count) {
-    (void)tokens; (void)values; (void)count;
-    RiCylinder(radius, zmin, zmax, tmax, RI_NULL);
+    RiCylinderV(radius, zmin, zmax, tmax, tokens, values, count);
 }
 
 static void render_Cone(RtFloat height, RtFloat radius, RtFloat tmax,
                         RtToken* tokens, RtPointer* values, int count) {
-    (void)tokens; (void)values; (void)count;
-    RiCone(height, radius, tmax, RI_NULL);
+    RiConeV(height, radius, tmax, tokens, values, count);
 }
 
 static void render_Disk(RtFloat height, RtFloat radius, RtFloat tmax,
                         RtToken* tokens, RtPointer* values, int count) {
-    (void)tokens; (void)values; (void)count;
-    RiDisk(height, radius, tmax, RI_NULL);
+    RiDiskV(height, radius, tmax, tokens, values, count);
 }
 
 static void render_Torus(RtFloat majorrad, RtFloat minorrad, RtFloat phimin,
                          RtFloat phimax, RtFloat tmax,
                          RtToken* tokens, RtPointer* values, int count) {
-    (void)tokens; (void)values; (void)count;
-    RiTorus(majorrad, minorrad, phimin, phimax, tmax, RI_NULL);
+    RiTorusV(majorrad, minorrad, phimin, phimax, tmax, tokens, values, count);
 }
 
 static void render_Paraboloid(RtFloat rmax, RtFloat zmin, RtFloat zmax, RtFloat tmax,
                               RtToken* tokens, RtPointer* values, int count) {
-    (void)tokens; (void)values; (void)count;
-    RiParaboloid(rmax, zmin, zmax, tmax, RI_NULL);
+    RiParaboloidV(rmax, zmin, zmax, tmax, tokens, values, count);
 }
 
 static void render_Hyperboloid(RtPoint p1, RtPoint p2, RtFloat tmax,
                                RtToken* tokens, RtPointer* values, int count) {
-    (void)tokens; (void)values; (void)count;
-    RiHyperboloid(p1, p2, tmax, RI_NULL);
+    RiHyperboloidV(p1, p2, tmax, tokens, values, count);
 }
 
 static void render_Polygon(RtInt nvertices, RtToken* tokens, RtPointer* values, int count) {
-    if (count > 0 && tokens[0] && strcmp(tokens[0], "P") == 0) {
-        RiPolygon(nvertices, "P", values[0], RI_NULL);
-    }
+    RiPolygonV(nvertices, tokens, values, count);
 }
 
 static void render_Patch(RtToken type, RtToken* tokens, RtPointer* values, int count) {
-    if (count > 0 && tokens[0] && strcmp(tokens[0], "P") == 0) {
-        RiPatch(type, "P", values[0], RI_NULL);
-    }
+    RiPatchV(type, tokens, values, count);
 }
 
 static void render_Geometry(RtToken type, RtToken* tokens, RtPointer* values, int count) {
-    (void)tokens; (void)values; (void)count;
-    RiGeometry(type, RI_NULL);
+    RiGeometryV(type, tokens, values, count);
 }
 
 static void render_LightSource(RtToken name, RtToken* tokens, RtPointer* values, int count) {
-    // Build varargs call based on parsed parameters
-    if (count == 0) {
-        RiLightSource(name, RI_NULL);
-        return;
-    }
-
-    // Simplified: just pass the first few common parameters
-    // A full implementation would need to handle all parameters
-    RtToken t1 = count > 0 ? tokens[0] : NULL;
-    RtPointer v1 = count > 0 ? values[0] : NULL;
-    RtToken t2 = count > 1 ? tokens[1] : NULL;
-    RtPointer v2 = count > 1 ? values[1] : NULL;
-    RtToken t3 = count > 2 ? tokens[2] : NULL;
-    RtPointer v3 = count > 2 ? values[2] : NULL;
-
-    if (count == 1 && t1) {
-        RiLightSource(name, t1, v1, RI_NULL);
-    } else if (count == 2 && t1 && t2) {
-        RiLightSource(name, t1, v1, t2, v2, RI_NULL);
-    } else if (count >= 3 && t1 && t2 && t3) {
-        RiLightSource(name, t1, v1, t2, v2, t3, v3, RI_NULL);
-    } else {
-        RiLightSource(name, RI_NULL);
-    }
+    RiLightSourceV(name, tokens, values, count);
 }
 
 static void render_Illuminate(RtToken light, RtBoolean onoff) {
@@ -267,12 +233,15 @@ RiCallbacks ri_render_callbacks = {
     .PixelSamples = render_PixelSamples,
     .PixelFilter = render_PixelFilter,
     .DepthOfField = render_DepthOfField,
+    .Shutter = render_Shutter,
     .ShadingRate = render_ShadingRate,
     .Option = render_Option,
     .AttributeBegin = render_AttributeBegin,
     .AttributeEnd = render_AttributeEnd,
     .TransformBegin = render_TransformBegin,
     .TransformEnd = render_TransformEnd,
+    .MotionBegin = render_MotionBegin,
+    .MotionEnd = render_MotionEnd,
     .Identity = render_Identity,
     .Transform = render_Transform,
     .ConcatTransform = render_ConcatTransform,

@@ -11,6 +11,9 @@ typedef struct RiCallbacks {
     void (*Begin)(RtToken name);
     void (*End)(void);
 
+    // Variable declarations
+    void (*Declare)(const char* name, const char* declaration);
+
     // Options
     void (*Format)(RtInt xres, RtInt yres, RtFloat aspect);
     void (*Display)(RtToken name, RtToken type, RtToken mode);
@@ -18,6 +21,7 @@ typedef struct RiCallbacks {
     void (*PixelSamples)(RtFloat xsamples, RtFloat ysamples);
     void (*PixelFilter)(RtToken filtername, RtFloat xwidth, RtFloat ywidth);
     void (*DepthOfField)(RtFloat fstop, RtFloat focallength, RtFloat focaldistance);
+    void (*Shutter)(RtFloat open, RtFloat close);
     void (*ShadingRate)(RtFloat size);
     void (*Option)(RtToken name, RtToken *tokens, RtPointer *values, int count);
 
@@ -26,6 +30,10 @@ typedef struct RiCallbacks {
     void (*AttributeEnd)(void);
     void (*TransformBegin)(void);
     void (*TransformEnd)(void);
+
+    // Motion blur
+    void (*MotionBegin)(RtInt n, RtFloat* times);
+    void (*MotionEnd)(void);
 
     // Transformations
     void (*Identity)(void);
