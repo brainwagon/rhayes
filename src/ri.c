@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <math.h>
+#include <time.h>
 #include "ri.h"
 #include "rh_math.h"
 #include "rh_image.h"
@@ -171,6 +172,14 @@ typedef struct {
 #define MAX_SPLIT_DEPTH 12  // Safety limit to prevent infinite recursion
 #define MIN_SPLIT_DEPTH 3   // Minimum splits before considering area
 
+// Pre-allocated scratch buffers for grid processing (avoids malloc in hot path)
+typedef struct {
+    RhVec3 screen_pos[MAX_GRID_SIZE * MAX_GRID_SIZE];
+    RhVec3 screen_pos_t1[MAX_GRID_SIZE * MAX_GRID_SIZE];
+    RhVec3 cam_positions[MAX_GRID_SIZE * MAX_GRID_SIZE];
+    RhVec3 cam_normals[MAX_GRID_SIZE * MAX_GRID_SIZE];
+} RhGridScratch;
+
 typedef struct {
     RhPrimitive prim;
     RhMat4 transform;
@@ -252,6 +261,21 @@ typedef struct {
         int total_micropolygons;
         int primitives_processed;   // Unique primitives (not per-bucket)
     } stats;
+
+    // Performance timing statistics
+    struct {
+        double bucket_time;         // Total time in bucket processing
+        double rasterize_time;      // Time spent in ri_sample_mpoly
+        double transform_time;      // Time spent transforming grids
+        int motion_mpolys;          // Micropolygons with motion blur
+        int static_mpolys;          // Micropolygons without motion blur
+    } timing;
+
+    // Pre-allocated scratch buffers (avoids malloc in hot path)
+    RhGridScratch* grid_scratch;
+
+    // Reusable micropolygon list for bucket processing
+    RhMicropolygonList bucket_mpolys;
 
     // Statistics output options (set via RiOption "statistics")
     struct {
@@ -542,6 +566,13 @@ static inline RhVec3 ri_vec3_lerp(RhVec3 a, RhVec3 b, float t) {
     );
 }
 
+// High-resolution timing helper for profiling
+static inline double ri_get_time(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
+
 // Helper function to get the time slice index for a pixel
 // Uses the same tile-based permutation as ri_temporal_hash for consistency
 static inline int ri_get_time_slice_idx(int x, int y, int ss_x, int ss_y) {
@@ -649,10 +680,13 @@ static void ri_sample_mpoly(
 
     int ss_x = g_ctx->pixel_samples_x;
     int ss_y = g_ctx->pixel_samples_y;
+    bool use_jitter = g_ctx->hider_options.jitter != 0;
 
-    // For motion blur, precompute time slices for efficiency
+    // For motion blur with non-jittered sampling, precompute time slices
+    // (Jittered path does per-pixel interpolation, so cache would be wasted)
     RhMotionCache cache;
-    if (has_motion) {
+    bool use_cache = has_motion && !use_jitter;
+    if (use_cache) {
         ri_precompute_motion_cache(
             mpoly, &cache, ss_x, ss_y,
             g_ctx->shutter_open, g_ctx->shutter_close,
@@ -672,13 +706,18 @@ static void ri_sample_mpoly(
         area2_static = ri_edge_function(v1_base, v2_base, v3_base.x, v3_base.y);
     }
 
+    // Precompute motion parameters for jittered path (avoid repeated division)
+    float motion_range = mpoly->motion_t1 - mpoly->motion_t0;
+    float inv_motion_range = (fabsf(motion_range) < 1e-6f) ? 0.0f : 1.0f / motion_range;
+    float shutter_range = g_ctx->shutter_close - g_ctx->shutter_open;
+
     for (int y = y0; y <= y1; y++) {
         for (int x = x0; x <= x1; x++) {
             float px = x + 0.5f;
             float py = y + 0.5f;
 
             // Apply spatial jitter if enabled
-            if (g_ctx->hider_options.jitter) {
+            if (use_jitter) {
                 float jx, jy;
                 ri_spatial_jitter(x, y, &jx, &jy);
                 px += jx;
@@ -690,30 +729,51 @@ static void ri_sample_mpoly(
             float area1, area2;
 
             if (has_motion) {
-                if (g_ctx->hider_options.jitter) {
+                if (use_jitter) {
                     // Jittered path: per-pixel interpolation for smooth blur
                     // Compute stratified time with jitter for this pixel
                     float pixel_t = ri_temporal_hash(x, y, ss_x, ss_y, 1);
 
                     // Map pixel sample time to world time via shutter interval
-                    float world_time = g_ctx->shutter_open + pixel_t * (g_ctx->shutter_close - g_ctx->shutter_open);
+                    float world_time = g_ctx->shutter_open + pixel_t * shutter_range;
 
-                    // Remap world time to motion parameter space
-                    float motion_range = mpoly->motion_t1 - mpoly->motion_t0;
+                    // Remap world time to motion parameter space (optimized)
                     float t;
-                    if (fabsf(motion_range) < 1e-6f) {
+                    if (inv_motion_range == 0.0f) {
                         t = 0.0f;  // Degenerate case: motion times equal
                     } else {
-                        t = (world_time - mpoly->motion_t0) / motion_range;
+                        t = (world_time - mpoly->motion_t0) * inv_motion_range;
                         if (t < 0.0f) t = 0.0f;
                         if (t > 1.0f) t = 1.0f;
                     }
 
-                    // Interpolate vertices per-pixel
-                    v0 = ri_vec3_lerp(mpoly->v[0], mpoly->v_t1[0], t);
-                    v1 = ri_vec3_lerp(mpoly->v[1], mpoly->v_t1[1], t);
-                    v2 = ri_vec3_lerp(mpoly->v[2], mpoly->v_t1[2], t);
-                    v3 = ri_vec3_lerp(mpoly->v[3], mpoly->v_t1[3], t);
+                    // EARLY BBOX REJECTION: Compute approximate bbox at time t
+                    // This avoids expensive lerps and edge functions for pixels outside the mpoly
+                    float x0_t = mpoly->v[0].x + t * (mpoly->v_t1[0].x - mpoly->v[0].x);
+                    float x1_t = mpoly->v[1].x + t * (mpoly->v_t1[1].x - mpoly->v[1].x);
+                    float x2_t = mpoly->v[2].x + t * (mpoly->v_t1[2].x - mpoly->v[2].x);
+                    float x3_t = mpoly->v[3].x + t * (mpoly->v_t1[3].x - mpoly->v[3].x);
+                    float y0_t = mpoly->v[0].y + t * (mpoly->v_t1[0].y - mpoly->v[0].y);
+                    float y1_t = mpoly->v[1].y + t * (mpoly->v_t1[1].y - mpoly->v[1].y);
+                    float y2_t = mpoly->v[2].y + t * (mpoly->v_t1[2].y - mpoly->v[2].y);
+                    float y3_t = mpoly->v[3].y + t * (mpoly->v_t1[3].y - mpoly->v[3].y);
+
+                    float bbox_min_x = fminf(fminf(x0_t, x1_t), fminf(x2_t, x3_t));
+                    float bbox_max_x = fmaxf(fmaxf(x0_t, x1_t), fmaxf(x2_t, x3_t));
+                    float bbox_min_y = fminf(fminf(y0_t, y1_t), fminf(y2_t, y3_t));
+                    float bbox_max_y = fmaxf(fmaxf(y0_t, y1_t), fmaxf(y2_t, y3_t));
+
+                    // Skip if pixel is outside the bbox at this time
+                    if (px < bbox_min_x || px > bbox_max_x ||
+                        py < bbox_min_y || py > bbox_max_y) {
+                        continue;
+                    }
+
+                    // Interpolate vertices per-pixel (reuse x,y computed above)
+                    v0 = rh_vec3_create(x0_t, y0_t, mpoly->v[0].z + t * (mpoly->v_t1[0].z - mpoly->v[0].z));
+                    v1 = rh_vec3_create(x1_t, y1_t, mpoly->v[1].z + t * (mpoly->v_t1[1].z - mpoly->v[1].z));
+                    v2 = rh_vec3_create(x2_t, y2_t, mpoly->v[2].z + t * (mpoly->v_t1[2].z - mpoly->v[2].z));
+                    v3 = rh_vec3_create(x3_t, y3_t, mpoly->v[3].z + t * (mpoly->v_t1[3].z - mpoly->v[3].z));
 
                     // Compute triangle areas for interpolated vertices
                     area1 = ri_edge_function(v0, v1, v3.x, v3.y);
@@ -1783,6 +1843,19 @@ void RiWorldBegin(void) {
     int count = g_ctx->num_buckets_x * g_ctx->num_buckets_y;
     g_ctx->buckets = (RhBucket*)calloc(count, sizeof(RhBucket));
 
+    // 5. Allocate scratch buffers for grid processing (avoids malloc in hot path)
+    g_ctx->grid_scratch = (RhGridScratch*)malloc(sizeof(RhGridScratch));
+
+    // 6. Initialize reusable micropolygon list
+    ri_mpoly_list_init(&g_ctx->bucket_mpolys);
+
+    // 7. Reset timing statistics
+    g_ctx->timing.bucket_time = 0.0;
+    g_ctx->timing.rasterize_time = 0.0;
+    g_ctx->timing.transform_time = 0.0;
+    g_ctx->timing.motion_mpolys = 0;
+    g_ctx->timing.static_mpolys = 0;
+
     g_ctx->all_items_count = 0;
     g_ctx->grid_counter = 0;  // Reset grid counter for diagnostic shaders
 
@@ -1794,11 +1867,16 @@ void RiWorldBegin(void) {
 void RiWorldEnd(void) {
     if (!g_ctx) return;
 
+    double bucket_start = ri_get_time();
+
     int ss_xres = g_ctx->xres * g_ctx->pixel_samples_x;
     int ss_yres = g_ctx->yres * g_ctx->pixel_samples_y;
 
     // Render Buckets - Efficient algorithm: process each primitive only once
     RhShadingMode mode = g_ctx->shading_mode;
+
+    // Use reusable micropolygon list from context (avoids malloc/free per primitive)
+    RhMicropolygonList* mpolys = &g_ctx->bucket_mpolys;
 
     for (int y = 0; y < g_ctx->num_buckets_y; y++) {
         for (int x = 0; x < g_ctx->num_buckets_x; x++) {
@@ -1824,14 +1902,20 @@ void RiWorldEnd(void) {
                 item->processed = true;
                 g_ctx->stats.primitives_processed++;
 
-                // Generate all micropolygons for this primitive (done once)
-                RhMicropolygonList mpolys;
-                ri_mpoly_list_init(&mpolys);
-                ri_process_item_recursive(item, 0, &mpolys, mode);
+                // Generate all micropolygons for this primitive (reuse list, just clear)
+                ri_mpoly_list_clear(mpolys);  // Clears count but keeps capacity
+                ri_process_item_recursive(item, 0, mpolys, mode);
 
                 // Distribute micropolygons to buckets
-                for (int mi = 0; mi < mpolys.count; mi++) {
-                    RhMicropolygon* mpoly = &mpolys.data[mi];
+                for (int mi = 0; mi < mpolys->count; mi++) {
+                    RhMicropolygon* mpoly = &mpolys->data[mi];
+
+                    // Track motion blur statistics
+                    if (mpoly->has_motion) {
+                        g_ctx->timing.motion_mpolys++;
+                    } else {
+                        g_ctx->timing.static_mpolys++;
+                    }
 
                     // Compute which buckets this micropolygon overlaps
                     int bx_min = mpoly->min_x / g_ctx->bucket_size;
@@ -1860,8 +1944,6 @@ void RiWorldEnd(void) {
                         }
                     }
                 }
-
-                ri_mpoly_list_free(&mpolys);
             }
 
             // Cleanup bucket item list
@@ -1872,6 +1954,11 @@ void RiWorldEnd(void) {
     }
     free(g_ctx->buckets);
     g_ctx->buckets = NULL;
+
+    // Free reusable micropolygon list
+    ri_mpoly_list_free(&g_ctx->bucket_mpolys);
+
+    g_ctx->timing.bucket_time = ri_get_time() - bucket_start;
 
     // Downsample if supersampling is enabled
     if (g_ctx->raster && g_ctx->raster->image &&
@@ -1982,6 +2069,11 @@ void RiWorldEnd(void) {
         }
         fprintf(text_out, "Total grids: %d\n", g_ctx->stats.total_grids);
         fprintf(text_out, "Total micropolygons: %d\n", g_ctx->stats.total_micropolygons);
+        fprintf(text_out, "\nMotion blur statistics:\n");
+        fprintf(text_out, "  Motion mpolys: %d\n", g_ctx->timing.motion_mpolys);
+        fprintf(text_out, "  Static mpolys: %d\n", g_ctx->timing.static_mpolys);
+        fprintf(text_out, "\nPerformance timing:\n");
+        fprintf(text_out, "  Bucket processing: %.3f s\n", g_ctx->timing.bucket_time);
         fprintf(text_out, "============================\n\n");
 
         if (text_out != stderr) fclose(text_out);
@@ -2014,12 +2106,19 @@ void RiWorldEnd(void) {
                 }
                 fprintf(json_out, "\n  },\n");
                 fprintf(json_out, "  \"grids_total\": %d,\n", g_ctx->stats.total_grids);
-                fprintf(json_out, "  \"micropolygons_total\": %d\n", g_ctx->stats.total_micropolygons);
+                fprintf(json_out, "  \"micropolygons_total\": %d,\n", g_ctx->stats.total_micropolygons);
+                fprintf(json_out, "  \"motion_mpolys\": %d,\n", g_ctx->timing.motion_mpolys);
+                fprintf(json_out, "  \"static_mpolys\": %d,\n", g_ctx->timing.static_mpolys);
+                fprintf(json_out, "  \"bucket_time_sec\": %.6f\n", g_ctx->timing.bucket_time);
                 fprintf(json_out, "}\n");
                 fclose(json_out);
             }
         }
     }
+
+    // Free grid scratch buffer
+    free(g_ctx->grid_scratch);
+    g_ctx->grid_scratch = NULL;
 
     // Cleanup items
     for (int i = 0; i < g_ctx->all_items_count; i++) {
@@ -2227,11 +2326,12 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             cam_lights[k].direction = rh_vec3_normalize(cam_lights[k].direction);
         }
 
-        // Temporary arrays for two-pass shading (needed for screen-space derivatives)
-        RhVec3* screen_pos = (RhVec3*)malloc(gridSize * gridSize * sizeof(RhVec3));
-        RhVec3* screen_pos_t1 = has_motion ? (RhVec3*)malloc(gridSize * gridSize * sizeof(RhVec3)) : NULL;
-        RhVec3* cam_positions = (RhVec3*)malloc(gridSize * gridSize * sizeof(RhVec3));
-        RhVec3* cam_normals = (RhVec3*)malloc(gridSize * gridSize * sizeof(RhVec3));
+        // Use pre-allocated scratch buffers (avoids malloc in hot path)
+        RhGridScratch* scratch = g_ctx->grid_scratch;
+        RhVec3* screen_pos = scratch->screen_pos;
+        RhVec3* screen_pos_t1 = has_motion ? scratch->screen_pos_t1 : NULL;
+        RhVec3* cam_positions = scratch->cam_positions;
+        RhVec3* cam_normals = scratch->cam_normals;
 
         // First pass: transform all vertices to screen space
         for (int i = 0; i < gridSize * gridSize; i++) {
@@ -2376,16 +2476,11 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             // Note: screen positions are passed separately to ri_grid_to_mpolys_motion
         }
 
-        free(cam_positions);
-        free(cam_normals);
-
         // Convert grid to micropolygons instead of direct rasterization
         // Pass motion blur screen positions if available
+        // Note: scratch buffers are reused, no free needed
         ri_grid_to_mpolys_motion(grid, screen_pos, screen_pos_t1, has_motion,
                                  item->motion_t0, item->motion_t1, out_mpolys, mode);
-
-        free(screen_pos);
-        if (screen_pos_t1) free(screen_pos_t1);
 
         rh_grid_destroy(grid);
         g_ctx->grid_counter++;

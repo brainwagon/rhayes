@@ -189,6 +189,38 @@ make test
 - `PLAN.md`: Project development plan.
 - `CLAUDE.md`: AI assistant guidance for this codebase.
 
+## Performance
+
+### Profiling Support
+Build with profiling enabled for gprof analysis:
+```sh
+make profile
+./bin/render scene.rib
+gprof bin/render gmon.out
+```
+
+### Motion Blur Optimizations
+The motion blur implementation includes several optimizations:
+- **Jittered path bypass**: Motion cache precomputation is skipped when jitter is enabled (the cache would be unused)
+- **Early bounding box rejection**: Per-pixel approximate bbox test before expensive vertex interpolation
+- **Pool-based scratch buffers**: Eliminates malloc/free in the hot grid transformation path
+- **Micropolygon list reuse**: Single list reused across primitives instead of per-primitive allocation
+- **Timing infrastructure**: Built-in statistics output via `Option "statistics" "endofframe" [1]`
+
+### Pending Optimization Issues
+Motion blur with jittered sampling remains computationally expensive for fast-moving objects. The fundamental issue is that micropolygon bounding boxes span the entire motion trail, causing many pixel iterations even with early rejection.
+
+**Current limitations:**
+- A stress test with 25 moving spheres at 640x480 with 4x4 supersampling takes ~108 seconds
+- Motion blur overhead is approximately 8x compared to static rendering for simple scenes
+- Profiling shows 85% of render time spent in `ri_sample_mpoly()` for motion blur scenes
+
+**Potential future optimizations (would require architectural changes):**
+- **Motion segment rendering**: Render micropolygons at discrete time slices and blend, rather than iterating over union bounding boxes
+- **Stochastic point sampling**: Use Monte Carlo sampling along motion paths instead of per-pixel evaluation
+- **Adaptive shading rate**: Use coarser micropolygon grids for fast-moving objects (they're blurry anyway)
+- **Deferred visibility**: Compute mpoly-to-pixel mapping first, then shade only visible contributions
+
 ## Work in Progress
 
 Current development focus:

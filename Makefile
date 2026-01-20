@@ -28,7 +28,7 @@ RENDER = $(BIN_DIR)/render
 CATRIB = $(BIN_DIR)/catrib
 SCENE2RIB = $(BIN_DIR)/scene2rib
 
-.PHONY: all clean libs programs test test-clean generate-refs
+.PHONY: all clean libs programs test test-clean generate-refs profile
 
 # Default target - build all executables
 all: $(TARGET) $(RENDER) $(CATRIB) $(SCENE2RIB)
@@ -114,3 +114,9 @@ generate-refs: $(RENDER)
 # Clean test output
 test-clean:
 	rm -rf $(TEST_OUT)
+
+# Build with profiling enabled (for gprof analysis)
+profile: CFLAGS += -pg -fno-omit-frame-pointer
+profile: LDFLAGS += -pg
+profile: clean all
+	@echo "Built with profiling. Run program, then use 'gprof ./rhayes gmon.out' to analyze."
