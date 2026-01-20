@@ -91,7 +91,16 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
 - **Basis Matrices**: Support for `RiBasis` (Bezier, B-Spline, Catmull-Rom, etc.).
 - **Shading & Lighting**:
     - Surface shaders: `matte`, `plastic`, `metal`, `paintedplastic` (textured), and diagnostic shaders (`random`, `randomgrid`).
-    - Light sources: Point and Distant lights.
+    - Light sources: Point, Distant, and Ambient lights.
+- **Motion Blur**:
+    - Temporal sampling with configurable shutter interval (`RiShutter`).
+    - Transform motion blur via `MotionBegin`/`MotionEnd` blocks.
+    - Correct shutter-to-motion time remapping for partial motion ranges.
+    - Stratified temporal sampling to reduce noise.
+- **Primitive Variables (Primvars)**:
+    - User-defined variables attached to primitives (`RiDeclare`).
+    - Support for all storage classes: constant, uniform, varying, vertex.
+    - Automatic interpolation during dicing and shading.
 - **Texture Mapping**:
     - PNG texture loading with automatic mipmap generation.
     - Box-filter decimation for mipmap pyramid.
@@ -100,23 +109,30 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
     - Correct handling of parametric singularities (e.g., sphere poles).
     - Support for grayscale, RGB, and RGBA textures.
 - **RIB Support**:
-    - RIB parser for scene description.
-    - RIB output for scene serialization.
+    - RIB parser for scene description with motion blur support.
+    - RIB output for scene serialization (`scene2rib` utility).
+    - Round-trip parsing and serialization (`catrib` utility).
 - **Output**: PNG image format with alpha channel and bKGD chunk support.
 
 ## Building
 Rhayes uses a standard Makefile.
 
 ```sh
-# Build the legacy demo executable (rhayes)
+# Build everything (demo executable and all utilities)
 make
 
-# Build all utilities (bin/render and bin/catrib)
-make programs
+# Clean build artifacts
+make clean
 
-# Build everything including libraries
-make all programs libs
+# Run the test suite
+make test
 ```
+
+This builds:
+- `rhayes` - Demo executable with built-in test scene
+- `bin/render` - RIB file renderer
+- `bin/catrib` - RIB parser/serializer utility
+- `bin/scene2rib` - C API to RIB converter
 
 ## Usage
 
@@ -133,10 +149,16 @@ Render any RIB (RenderMan Interface Bytestream) file:
 ./bin/render scene.rib
 ```
 
-### RIB Utility (catrib)
-A tool to parse and re-serialize RIB files, useful for debugging or pretty-printing:
+### RIB Utilities
+
+**catrib** - Parse and re-serialize RIB files, useful for debugging or pretty-printing:
 ```sh
 ./bin/catrib input.rib -o output.rib
+```
+
+**scene2rib** - Convert C API scene descriptions to RIB format:
+```sh
+./bin/scene2rib > scene.rib
 ```
 
 ## Testing
@@ -150,12 +172,15 @@ make test
 - `src/`: Core implementation of the REYES pipeline and utilities.
 - `include/`: API headers and internal configuration.
 - `tests/`: RIB test files, reference images, and test runner.
+- `textures/`: Sample textures for testing.
 - `bin/`: Compiled executables.
 - `lib/`: Compiled static libraries.
 - `obj/`: Object files.
 - `FSD.md`: Functional System Description.
 - `RISPEC.md` / `PARTI.md`: RenderMan Interface Specification documentation.
+- `rispec_variables.md`: Reference for RiDeclare variable types and interpolation.
 - `PLAN.md`: Project development plan.
+- `CLAUDE.md`: AI assistant guidance for this codebase.
 
 ## Work in Progress
 
@@ -163,7 +188,9 @@ Current development focus:
 - **Additional Shaders**: Extend texture support to `shinymetal` and other shaders.
 - **Trilinear Filtering**: Add interpolation between mip levels for smoother LOD transitions.
 - **Displacement Mapping**: Support for procedural and texture-based surface displacement.
-- **Motion Blur**: Implement motion blur via temporal sampling.
+- **Deformation Motion Blur**: Extend motion blur to support deforming geometry (not just transforms).
+- **Depth of Field**: Implement lens sampling for depth of field effects.
+- **Transparency & Compositing**: Alpha-based visibility with proper depth sorting.
 
 ## License
 MIT License.
