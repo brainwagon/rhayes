@@ -1,0 +1,38 @@
+# Same scene as motion blur test, but no shutter (no motion blur)
+Format 400 300 1
+Display "no_motion.png" "file" "rgb"
+Projection "perspective" "fov" 45
+
+# No Shutter means shutter_open = shutter_close = 0 (no blur)
+PixelSamples 4 4
+
+Translate 0 0 5
+WorldBegin
+
+# Ambient light
+LightSource "ambientlight" "intensity" 0.3
+
+# Distant light
+LightSource "distantlight" "intensity" 0.8 "from" [1 2 -1] "to" [0 0 0]
+
+# Ground plane
+Color [0.3 0.3 0.3]
+Surface "matte"
+Polygon "P" [-5 -1 -5  5 -1 -5  5 -1 5  -5 -1 5]
+
+# Sphere in middle position (no motion blur)
+Color [1 0 0]
+Surface "plastic"
+AttributeBegin
+  Translate 0 0 0
+  Sphere 0.5 -0.5 0.5 360
+AttributeEnd
+
+# Static reference sphere
+Color [0 0 1]
+AttributeBegin
+  Translate 0 1 0
+  Sphere 0.3 -0.3 0.3 360
+AttributeEnd
+
+WorldEnd
