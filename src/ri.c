@@ -119,6 +119,22 @@ typedef struct {
     int max_x, max_y;
 } RhMicropolygon;
 
+// --- Motion Blur Time-Indexed Sampling Structures ---
+#define MAX_MOTION_TIME_SAMPLES 64  // Supports up to 8x8 supersampling
+
+typedef struct {
+    RhVec3 v[4];           // Interpolated vertices at this time
+    float area1, area2;    // Precomputed triangle areas
+    int min_x, min_y;      // Per-time-slice bounding box
+    int max_x, max_y;
+} RhTimeSlice;
+
+typedef struct {
+    RhTimeSlice slices[MAX_MOTION_TIME_SAMPLES];
+    int num_slices;
+    int ss_x, ss_y;
+} RhMotionCache;
+
 typedef struct {
     RhMicropolygon* data;
     int count;
@@ -485,19 +501,31 @@ static inline void ri_spatial_jitter(int x, int y, float* jitter_x, float* jitte
 // Simple hash function for stratified temporal sampling
 // Returns a value in [0,1] based on pixel coordinates
 // jitter_enabled: if true, adds random jitter within stratum; if false, uses center of stratum
+//
+// Uses tile-based permutation to decorrelate spatial and temporal sampling:
+// - Within each ss_x × ss_y tile, all time strata are sampled exactly once (stratification)
+// - The (subpixel → time) mapping varies per tile (decorrelation)
+// This prevents visible banding patterns aligned with the sample grid
 static inline float ri_temporal_hash(int x, int y, int ss_x, int ss_y, int jitter_enabled) {
-    // Use subpixel position within the pixel sample grid for stratification
     int sub_x = x % ss_x;
     int sub_y = y % ss_y;
-    int sample_idx = sub_y * ss_x + sub_x;
     int total_samples = ss_x * ss_y;
+
+    // Tile-based permutation for decorrelation
+    int tile_x = x / ss_x;
+    int tile_y = y / ss_y;
+    unsigned int tile_hash = (unsigned int)(tile_x * 73856093) ^ (unsigned int)(tile_y * 19349663);
+
+    // Permute the sample index based on tile (preserves stratification within tile)
+    int base_idx = sub_y * ss_x + sub_x;
+    int sample_idx = (base_idx + (int)(tile_hash % (unsigned int)total_samples)) % total_samples;
 
     // Stratified time: jitter within each stratum or use center
     float jitter;
     if (jitter_enabled) {
-        // Use a simple LCG-style hash for jitter
-        unsigned int hash = (unsigned int)(x * 73856093) ^ (unsigned int)(y * 19349663);
-        jitter = (float)(hash & 0xFFFF) / 65536.0f;
+        // Use different primes than tile_hash for per-pixel jitter
+        unsigned int pixel_hash = (unsigned int)(x * 127717) ^ (unsigned int)(y * 94531);
+        jitter = (float)(pixel_hash & 0xFFFF) / 65536.0f;
     } else {
         jitter = 0.5f;  // Center of stratum
     }
@@ -514,10 +542,91 @@ static inline RhVec3 ri_vec3_lerp(RhVec3 a, RhVec3 b, float t) {
     );
 }
 
+// Helper function to get the time slice index for a pixel
+// Uses the same tile-based permutation as ri_temporal_hash for consistency
+static inline int ri_get_time_slice_idx(int x, int y, int ss_x, int ss_y) {
+    int sub_x = x % ss_x;
+    int sub_y = y % ss_y;
+    int total_samples = ss_x * ss_y;
+
+    int tile_x = x / ss_x;
+    int tile_y = y / ss_y;
+    unsigned int tile_hash = (unsigned int)(tile_x * 73856093) ^ (unsigned int)(tile_y * 19349663);
+
+    int base_idx = sub_y * ss_x + sub_x;
+    return (base_idx + (int)(tile_hash % (unsigned int)total_samples)) % total_samples;
+}
+
+// Precompute interpolated vertices for all time slices
+// This avoids redundant per-pixel vertex interpolation
+static void ri_precompute_motion_cache(
+    const RhMicropolygon* mpoly,
+    RhMotionCache* cache,
+    int ss_x, int ss_y,
+    float shutter_open, float shutter_close,
+    float motion_t0, float motion_t1
+) {
+    int total_samples = ss_x * ss_y;
+    cache->num_slices = total_samples;
+    cache->ss_x = ss_x;
+    cache->ss_y = ss_y;
+
+    float motion_range = motion_t1 - motion_t0;
+    bool degenerate_motion = fabsf(motion_range) < 1e-6f;
+
+    for (int slice_idx = 0; slice_idx < total_samples; slice_idx++) {
+        RhTimeSlice* slice = &cache->slices[slice_idx];
+
+        // Compute the normalized time for this stratum (center of stratum)
+        float pixel_t = ((float)slice_idx + 0.5f) / (float)total_samples;
+
+        // Map pixel sample time to world time via shutter interval
+        float world_time = shutter_open + pixel_t * (shutter_close - shutter_open);
+
+        // Remap world time to motion parameter space
+        float t;
+        if (degenerate_motion) {
+            t = 0.0f;
+        } else {
+            t = (world_time - motion_t0) / motion_range;
+            if (t < 0.0f) t = 0.0f;
+            if (t > 1.0f) t = 1.0f;
+        }
+
+        // Interpolate vertices
+        slice->v[0] = ri_vec3_lerp(mpoly->v[0], mpoly->v_t1[0], t);
+        slice->v[1] = ri_vec3_lerp(mpoly->v[1], mpoly->v_t1[1], t);
+        slice->v[2] = ri_vec3_lerp(mpoly->v[2], mpoly->v_t1[2], t);
+        slice->v[3] = ri_vec3_lerp(mpoly->v[3], mpoly->v_t1[3], t);
+
+        // Precompute triangle areas
+        slice->area1 = ri_edge_function(slice->v[0], slice->v[1], slice->v[3].x, slice->v[3].y);
+        slice->area2 = ri_edge_function(slice->v[1], slice->v[2], slice->v[3].x, slice->v[3].y);
+
+        // Compute per-slice bounding box
+        float min_x = slice->v[0].x;
+        float max_x = slice->v[0].x;
+        float min_y = slice->v[0].y;
+        float max_y = slice->v[0].y;
+
+        for (int i = 1; i < 4; i++) {
+            if (slice->v[i].x < min_x) min_x = slice->v[i].x;
+            if (slice->v[i].x > max_x) max_x = slice->v[i].x;
+            if (slice->v[i].y < min_y) min_y = slice->v[i].y;
+            if (slice->v[i].y > max_y) max_y = slice->v[i].y;
+        }
+
+        slice->min_x = (int)floorf(min_x);
+        slice->max_x = (int)ceilf(max_x);
+        slice->min_y = (int)floorf(min_y);
+        slice->max_y = (int)ceilf(max_y);
+    }
+}
+
 // Rasterize a single micropolygon within the given clip bounds
 // mpoly vertex layout: v[0]=TL, v[1]=TR, v[2]=BR, v[3]=BL
 // Triangles: T1(v0, v1, v3) and T2(v1, v2, v3)
-// With motion blur: vertices are interpolated based on per-pixel stratified time
+// With motion blur: uses precomputed time-indexed sampling for efficiency
 static void ri_sample_mpoly(
     RhRasterizer* r,
     const RhMicropolygon* mpoly,
@@ -538,13 +647,25 @@ static void ri_sample_mpoly(
     bool has_motion = mpoly->has_motion &&
                       (g_ctx->shutter_close > g_ctx->shutter_open);
 
-    // If no motion blur, use static vertices
+    int ss_x = g_ctx->pixel_samples_x;
+    int ss_y = g_ctx->pixel_samples_y;
+
+    // For motion blur, precompute time slices for efficiency
+    RhMotionCache cache;
+    if (has_motion) {
+        ri_precompute_motion_cache(
+            mpoly, &cache, ss_x, ss_y,
+            g_ctx->shutter_open, g_ctx->shutter_close,
+            mpoly->motion_t0, mpoly->motion_t1
+        );
+    }
+
+    // For static case, use base vertices and precompute areas once
     RhVec3 v0_base = mpoly->v[0]; // TL
     RhVec3 v1_base = mpoly->v[1]; // TR
     RhVec3 v2_base = mpoly->v[2]; // BR
     RhVec3 v3_base = mpoly->v[3]; // BL
 
-    // For static case, compute areas once
     float area1_static = 0, area2_static = 0;
     if (!has_motion) {
         area1_static = ri_edge_function(v0_base, v1_base, v3_base.x, v3_base.y);
@@ -564,37 +685,58 @@ static void ri_sample_mpoly(
                 py += jy;
             }
 
-            // Get vertices, interpolating for motion blur
+            // Get vertices based on motion blur state
             RhVec3 v0, v1, v2, v3;
             float area1, area2;
 
             if (has_motion) {
-                // Compute stratified time for this pixel (in [0,1])
-                float pixel_t = ri_temporal_hash(x, y, g_ctx->pixel_samples_x, g_ctx->pixel_samples_y, g_ctx->hider_options.jitter);
+                if (g_ctx->hider_options.jitter) {
+                    // Jittered path: per-pixel interpolation for smooth blur
+                    // Compute stratified time with jitter for this pixel
+                    float pixel_t = ri_temporal_hash(x, y, ss_x, ss_y, 1);
 
-                // Map pixel sample time to world time via shutter interval
-                float world_time = g_ctx->shutter_open + pixel_t * (g_ctx->shutter_close - g_ctx->shutter_open);
+                    // Map pixel sample time to world time via shutter interval
+                    float world_time = g_ctx->shutter_open + pixel_t * (g_ctx->shutter_close - g_ctx->shutter_open);
 
-                // Remap world time to motion parameter space
-                float motion_range = mpoly->motion_t1 - mpoly->motion_t0;
-                float t;
-                if (fabsf(motion_range) < 1e-6f) {
-                    t = 0.0f;  // Degenerate case: motion times equal
+                    // Remap world time to motion parameter space
+                    float motion_range = mpoly->motion_t1 - mpoly->motion_t0;
+                    float t;
+                    if (fabsf(motion_range) < 1e-6f) {
+                        t = 0.0f;  // Degenerate case: motion times equal
+                    } else {
+                        t = (world_time - mpoly->motion_t0) / motion_range;
+                        if (t < 0.0f) t = 0.0f;
+                        if (t > 1.0f) t = 1.0f;
+                    }
+
+                    // Interpolate vertices per-pixel
+                    v0 = ri_vec3_lerp(mpoly->v[0], mpoly->v_t1[0], t);
+                    v1 = ri_vec3_lerp(mpoly->v[1], mpoly->v_t1[1], t);
+                    v2 = ri_vec3_lerp(mpoly->v[2], mpoly->v_t1[2], t);
+                    v3 = ri_vec3_lerp(mpoly->v[3], mpoly->v_t1[3], t);
+
+                    // Compute triangle areas for interpolated vertices
+                    area1 = ri_edge_function(v0, v1, v3.x, v3.y);
+                    area2 = ri_edge_function(v1, v2, v3.x, v3.y);
                 } else {
-                    t = (world_time - mpoly->motion_t0) / motion_range;
-                    if (t < 0.0f) t = 0.0f;
-                    if (t > 1.0f) t = 1.0f;
+                    // Non-jittered path: use precomputed cache for efficiency
+                    int slice_idx = ri_get_time_slice_idx(x, y, ss_x, ss_y);
+                    const RhTimeSlice* slice = &cache.slices[slice_idx];
+
+                    // Early exit if pixel is outside this time slice's bounding box
+                    if (x < slice->min_x || x > slice->max_x ||
+                        y < slice->min_y || y > slice->max_y) {
+                        continue;
+                    }
+
+                    // Use precomputed vertices
+                    v0 = slice->v[0];
+                    v1 = slice->v[1];
+                    v2 = slice->v[2];
+                    v3 = slice->v[3];
+                    area1 = slice->area1;
+                    area2 = slice->area2;
                 }
-
-                // Interpolate vertices
-                v0 = ri_vec3_lerp(mpoly->v[0], mpoly->v_t1[0], t);
-                v1 = ri_vec3_lerp(mpoly->v[1], mpoly->v_t1[1], t);
-                v2 = ri_vec3_lerp(mpoly->v[2], mpoly->v_t1[2], t);
-                v3 = ri_vec3_lerp(mpoly->v[3], mpoly->v_t1[3], t);
-
-                // Compute triangle areas for interpolated vertices
-                area1 = ri_edge_function(v0, v1, v3.x, v3.y);
-                area2 = ri_edge_function(v1, v2, v3.x, v3.y);
             } else {
                 v0 = v0_base;
                 v1 = v1_base;
@@ -2023,15 +2165,9 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
     RhMat4 mvp = rh_mat4_mul(g_ctx->projection,
                   rh_mat4_mul(g_ctx->view_matrix, item->transform));
 
-    // Compute screen-space bounding box area (using motion bounds if applicable)
-    float screen_area;
-    if (item->has_motion) {
-        RhMat4 mvp_t1 = rh_mat4_mul(g_ctx->projection,
-                          rh_mat4_mul(g_ctx->view_matrix, item->transform_t1));
-        screen_area = ri_compute_screen_area_motion(p, &mvp, &mvp_t1);
-    } else {
-        screen_area = ri_compute_screen_area(p, &mvp);
-    }
+    // Compute screen-space bounding box area at t0 only for splitting/dicing decisions
+    // Moving objects will be blurry anyway, so fine dicing isn't needed for motion
+    float screen_area = ri_compute_screen_area(p, &mvp);
 
     // Adjust area threshold for supersampling and shading rate
     float ss_factor = (float)(g_ctx->pixel_samples_x * g_ctx->pixel_samples_y);

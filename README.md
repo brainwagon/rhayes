@@ -96,12 +96,14 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
     - Temporal sampling with configurable shutter interval (`RiShutter`).
     - Transform motion blur via `MotionBegin`/`MotionEnd` blocks.
     - Correct shutter-to-motion time remapping for partial motion ranges.
-    - Stratified temporal sampling to reduce noise.
+    - Stratified temporal sampling with tile-based decorrelation to reduce banding.
+    - Efficient shutter-open evaluation: splitting/dicing and shading use t0 bounds only (moving objects are blurry anyway).
 - **Jittered Sampling**:
     - Spatial jitter for improved anti-aliasing at edges.
-    - Temporal jitter for smoother motion blur.
+    - Per-pixel temporal jitter for smooth motion blur (no discrete time slice artifacts).
     - Configurable via `RiHider` API (`Hider "hidden" "jitter" [0/1]`).
     - Enabled by default; deterministic per-pixel hash for reproducible renders.
+    - Non-jittered mode uses precomputed time slices for faster rendering.
 - **Primitive Variables (Primvars)**:
     - User-defined variables attached to primitives (`RiDeclare`).
     - Support for all storage classes: constant, uniform, varying, vertex.
