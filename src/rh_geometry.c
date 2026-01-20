@@ -1,7 +1,101 @@
+#define _POSIX_C_SOURCE 200809L
 #include "rh_geometry.h"
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+
+// --- Primvar Helper Functions ---
+
+// Get component count for a given type
+int rh_type_component_count(RiVarType type) {
+    switch (type) {
+        case RI_TYPE_FLOAT:   return 1;
+        case RI_TYPE_INTEGER: return 1;
+        case RI_TYPE_STRING:  return 1;
+        case RI_TYPE_COLOR:   return 3;
+        case RI_TYPE_POINT:   return 3;
+        case RI_TYPE_VECTOR:  return 3;
+        case RI_TYPE_NORMAL:  return 3;
+        case RI_TYPE_HPOINT:  return 4;
+        case RI_TYPE_MATRIX:  return 16;
+        default:              return 1;
+    }
+}
+
+// Get byte size for a single element of a given type
+static size_t rh_type_element_size(RiVarType type) {
+    switch (type) {
+        case RI_TYPE_FLOAT:   return sizeof(float);
+        case RI_TYPE_INTEGER: return sizeof(int);
+        case RI_TYPE_STRING:  return sizeof(char*);
+        case RI_TYPE_COLOR:   return 3 * sizeof(float);
+        case RI_TYPE_POINT:   return 3 * sizeof(float);
+        case RI_TYPE_VECTOR:  return 3 * sizeof(float);
+        case RI_TYPE_NORMAL:  return 3 * sizeof(float);
+        case RI_TYPE_HPOINT:  return 4 * sizeof(float);
+        case RI_TYPE_MATRIX:  return 16 * sizeof(float);
+        default:              return sizeof(float);
+    }
+}
+
+// Copy a primitive variable (deep copy of data)
+void rh_primvar_copy(RhPrimVar* dst, const RhPrimVar* src) {
+    strncpy(dst->name, src->name, sizeof(dst->name) - 1);
+    dst->name[sizeof(dst->name) - 1] = '\0';
+    dst->sclass = src->sclass;
+    dst->type = src->type;
+    dst->count = src->count;
+
+    // Deep copy the data
+    size_t element_size = rh_type_element_size(src->type);
+    size_t total_size = element_size * src->count;
+
+    if (src->type == RI_TYPE_STRING) {
+        // For strings, copy each string pointer and the string itself
+        dst->data = malloc(src->count * sizeof(char*));
+        if (dst->data) {
+            char** dst_strings = (char**)dst->data;
+            char** src_strings = (char**)src->data;
+            for (int i = 0; i < src->count; i++) {
+                if (src_strings[i]) {
+                    dst_strings[i] = strdup(src_strings[i]);
+                } else {
+                    dst_strings[i] = NULL;
+                }
+            }
+        }
+    } else {
+        dst->data = malloc(total_size);
+        if (dst->data) {
+            memcpy(dst->data, src->data, total_size);
+        }
+    }
+}
+
+// Free a single primitive variable's data
+void rh_primvar_free(RhPrimVar* pv) {
+    if (pv && pv->data) {
+        if (pv->type == RI_TYPE_STRING) {
+            // Free each string
+            char** strings = (char**)pv->data;
+            for (int i = 0; i < pv->count; i++) {
+                free(strings[i]);
+            }
+        }
+        free(pv->data);
+        pv->data = NULL;
+    }
+}
+
+// Free an array of primitive variables
+void rh_primvar_array_free(RhPrimVar* primvars, int count) {
+    if (primvars) {
+        for (int i = 0; i < count; i++) {
+            rh_primvar_free(&primvars[i]);
+        }
+        free(primvars);
+    }
+}
 
 // --- Grid Implementation ---
 
@@ -17,6 +111,8 @@ RhMicroGrid* rh_grid_create(int width, int height) {
     g->normals = (RhVec3*)malloc(count * sizeof(RhVec3));
     g->u_coords = (RhFloat*)malloc(count * sizeof(RhFloat));
     g->v_coords = (RhFloat*)malloc(count * sizeof(RhFloat));
+    g->primvars = NULL;
+    g->num_primvars = 0;
 
     if (!g->positions || !g->colors || !g->opacities || !g->normals ||
         !g->u_coords || !g->v_coords) {
@@ -34,6 +130,7 @@ void rh_grid_destroy(RhMicroGrid* g) {
         if (g->normals) free(g->normals);
         if (g->u_coords) free(g->u_coords);
         if (g->v_coords) free(g->v_coords);
+        rh_primvar_array_free(g->primvars, g->num_primvars);
         free(g);
     }
 }
@@ -50,6 +147,7 @@ RhPrimitive rh_prim_create_sphere(RhFloat radius, RhFloat zmin, RhFloat zmax, Rh
     p.data.sphere.theta_max = tmax;
     p.u_min = 0.0f; p.u_max = 1.0f;
     p.v_min = 0.0f; p.v_max = 1.0f;
+    p.primvars = NULL; p.num_primvars = 0;
     return p;
 }
 
@@ -62,6 +160,7 @@ RhPrimitive rh_prim_create_cylinder(RhFloat radius, RhFloat zmin, RhFloat zmax, 
     p.data.cylinder.theta_max = tmax;
     p.u_min = 0.0f; p.u_max = 1.0f;
     p.v_min = 0.0f; p.v_max = 1.0f;
+    p.primvars = NULL; p.num_primvars = 0;
     return p;
 }
 
@@ -73,6 +172,7 @@ RhPrimitive rh_prim_create_cone(RhFloat height, RhFloat radius, RhFloat tmax) {
     p.data.cone.theta_max = tmax;
     p.u_min = 0.0f; p.u_max = 1.0f;
     p.v_min = 0.0f; p.v_max = 1.0f;
+    p.primvars = NULL; p.num_primvars = 0;
     return p;
 }
 
@@ -85,6 +185,7 @@ RhPrimitive rh_prim_create_paraboloid(RhFloat rmax, RhFloat zmin, RhFloat zmax, 
     p.data.paraboloid.theta_max = tmax;
     p.u_min = 0.0f; p.u_max = 1.0f;
     p.v_min = 0.0f; p.v_max = 1.0f;
+    p.primvars = NULL; p.num_primvars = 0;
     return p;
 }
 
@@ -96,6 +197,7 @@ RhPrimitive rh_prim_create_disk(RhFloat height, RhFloat radius, RhFloat tmax) {
     p.data.disk.theta_max = tmax;
     p.u_min = 0.0f; p.u_max = 1.0f;
     p.v_min = 0.0f; p.v_max = 1.0f;
+    p.primvars = NULL; p.num_primvars = 0;
     return p;
 }
 
@@ -109,6 +211,7 @@ RhPrimitive rh_prim_create_torus(RhFloat majorradius, RhFloat minorradius, RhFlo
     p.data.torus.theta_max = tmax;
     p.u_min = 0.0f; p.u_max = 1.0f;
     p.v_min = 0.0f; p.v_max = 1.0f;
+    p.primvars = NULL; p.num_primvars = 0;
     return p;
 }
 
@@ -120,6 +223,7 @@ RhPrimitive rh_prim_create_hyperboloid(RhVec3 point1, RhVec3 point2, RhFloat tma
     p.data.hyperboloid.theta_max = tmax;
     p.u_min = 0.0f; p.u_max = 1.0f;
     p.v_min = 0.0f; p.v_max = 1.0f;
+    p.primvars = NULL; p.num_primvars = 0;
     return p;
 }
 
@@ -133,6 +237,7 @@ RhPrimitive rh_prim_create_polygon(int count, const RhVec3* vertices) {
     }
     p.u_min = 0.0f; p.u_max = 1.0f;
     p.v_min = 0.0f; p.v_max = 1.0f;
+    p.primvars = NULL; p.num_primvars = 0;
     return p;
 }
 
@@ -144,6 +249,7 @@ RhPrimitive rh_prim_create_patch_bicubic(const RhVec3* cp, RhMat4 u_basis, RhMat
     p.data.patch.v_basis = v_basis;
     p.u_min = 0.0f; p.u_max = 1.0f;
     p.v_min = 0.0f; p.v_max = 1.0f;
+    p.primvars = NULL; p.num_primvars = 0;
     return p;
 }
 
@@ -154,6 +260,10 @@ void rh_prim_free_data(RhPrimitive* p) {
             p->data.polygon.vertices = NULL;
         }
     }
+    // Free any attached primvars
+    rh_primvar_array_free(p->primvars, p->num_primvars);
+    p->primvars = NULL;
+    p->num_primvars = 0;
 }
 
 RhBounds3 rh_prim_bound(const RhPrimitive* p) {

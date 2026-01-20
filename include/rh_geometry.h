@@ -3,6 +3,7 @@
 
 #include "rh_math.h"
 #include "rh_image.h"
+#include "ri.h"
 #include <stdbool.h>
 
 // --- Micropolygon Grid ---
@@ -16,10 +17,20 @@ typedef struct {
     RhVec3* normals;
     RhFloat* u_coords;  // Parametric u coordinates [0,1]
     RhFloat* v_coords;  // Parametric v coordinates [0,1]
+
+    // User-defined primitive variables (primvars)
+    RhPrimVar* primvars;  // Array of primitive variables
+    int num_primvars;     // Number of primitive variables
 } RhMicroGrid;
 
 RhMicroGrid* rh_grid_create(int width, int height);
 void rh_grid_destroy(RhMicroGrid* g);
+
+// Primitive variable (primvar) helper functions
+void rh_primvar_copy(RhPrimVar* dst, const RhPrimVar* src);
+void rh_primvar_free(RhPrimVar* pv);
+void rh_primvar_array_free(RhPrimVar* primvars, int count);
+int rh_type_component_count(RiVarType type);
 
 // --- Primitives ---
 
@@ -103,10 +114,14 @@ typedef struct {
         RhTorus torus;
         RhHyperboloid hyperboloid;
     } data;
-    
+
     // Parametric domain [0, 1]
     RhFloat u_min, u_max;
     RhFloat v_min, v_max;
+
+    // User-defined primitive variables (primvars)
+    RhPrimVar* primvars;  // Array of primitive variables
+    int num_primvars;     // Number of primitive variables
 } RhPrimitive;
 
 RhPrimitive rh_prim_create_sphere(RhFloat radius, RhFloat zmin, RhFloat zmax, RhFloat tmin, RhFloat tmax);

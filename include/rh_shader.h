@@ -3,6 +3,7 @@
 
 #include "rh_math.h"
 #include "rh_image.h"
+#include "ri.h"
 
 // Shader Inputs/Outputs (Surface Global Variables in RSL)
 typedef struct {
@@ -10,17 +11,17 @@ typedef struct {
     RhVec3 P;  // Surface Position (Camera Space)
     RhVec3 N;  // Surface Normal (Camera Space)
     RhVec3 I;  // Incident Vector (Camera -> Point)
-    
+
     RhColor Cs; // Surface Color
     RhColor Os; // Surface Opacity
-    
+
     RhFloat u, v; // Texture coords
-    RhFloat du, dv; 
-    
+    RhFloat du, dv;
+
     // Outputs
     RhColor Ci; // Incident Color (Final Shaded Color)
     RhColor Oi; // Incident Opacity
-    
+
     // Light Loop Helpers
     // In a real RSL compiler, illuminance() loops lights.
     // Here we might need access to the light list.
@@ -31,7 +32,14 @@ typedef struct {
     void* grid_ptr;      // Pointer to current grid (for hashing)
     int vertex_index;    // Index of vertex within grid
 
+    // User-defined primitive variables (primvars)
+    RhPrimVar* primvars;  // Array of primitive variables from grid
+    int num_primvars;     // Number of primitive variables
+
 } RhShaderContext;
+
+// Primvar lookup helper for shaders
+RhPrimVar* rh_shader_get_primvar(RhShaderContext* ctx, const char* name);
 
 typedef void (*RhShaderFunc)(RhShaderContext* ctx, void* params);
 

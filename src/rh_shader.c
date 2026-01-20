@@ -3,6 +3,20 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
+
+// --- Primvar Lookup Helper ---
+
+RhPrimVar* rh_shader_get_primvar(RhShaderContext* ctx, const char* name) {
+    if (!ctx || !name || !ctx->primvars) return NULL;
+
+    for (int i = 0; i < ctx->num_primvars; i++) {
+        if (strcmp(ctx->primvars[i].name, name) == 0) {
+            return &ctx->primvars[i];
+        }
+    }
+    return NULL;
+}
 
 // Helper: Standard Lighting Loop (Simulating 'illuminance' or simple additive)
 // For MVP, we'll just pass lights array in void* or access global?
