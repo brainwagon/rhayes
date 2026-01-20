@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,8 @@
 
 typedef struct {
     RhMat4 transform; // Current Transformation Matrix (Object -> World/Camera)
+    RhMat4 transform_t1; // Transform at t1 for motion blur
+    bool has_motion;     // True if transform differs from transform_t1
     RhColor color;
 
     // Basis
@@ -69,27 +72,7 @@ RtMatrix RiPowerBasis = {
 };
 
 // --- Variable Declaration Types (RiDeclare) ---
-
-// Storage classes (interpolation modes)
-typedef enum {
-    RI_CLASS_CONSTANT,   // One value per primitive
-    RI_CLASS_UNIFORM,    // One value per face/patch
-    RI_CLASS_VARYING,    // One value per parametric corner (bilinear interpolation)
-    RI_CLASS_VERTEX      // One value per control vertex (basis interpolation)
-} RiStorageClass;
-
-// Variable data types
-typedef enum {
-    RI_TYPE_FLOAT,       // 1 component
-    RI_TYPE_INTEGER,     // 1 component
-    RI_TYPE_STRING,      // 1 component (pointer)
-    RI_TYPE_COLOR,       // 3 components
-    RI_TYPE_POINT,       // 3 components
-    RI_TYPE_VECTOR,      // 3 components
-    RI_TYPE_NORMAL,      // 3 components
-    RI_TYPE_HPOINT,      // 4 components (homogeneous)
-    RI_TYPE_MATRIX       // 16 components
-} RiVarType;
+// Note: RiStorageClass, RiVarType, and RhPrimVar are defined in ri.h
 
 // Variable declaration entry
 typedef struct {
@@ -103,7 +86,11 @@ typedef struct {
 
 typedef struct {
     RhPrimitive prim;
-    RhMat4 transform; // CTM at creation
+    RhMat4 transform; // CTM at creation (t0)
+    RhMat4 transform_t1; // Transform at t1 for motion blur
+    bool has_motion;     // True if motion blur active
+    float motion_t0;     // Time value for transform (from MotionBegin)
+    float motion_t1;     // Time value for transform_t1 (from MotionBegin)
     RhColor color;
     RhShaderFunc shader;
     void* shader_params;
@@ -119,12 +106,16 @@ typedef enum {
 } RhShadingMode;
 
 typedef struct {
-    RhVec3 v[4];       // Screen-space vertices (x=pixel, y=pixel, z=depth)
+    RhVec3 v[4];       // Screen-space vertices (x=pixel, y=pixel, z=depth) at t0
+    RhVec3 v_t1[4];    // Screen-space vertices at t1 for motion blur
+    bool has_motion;   // True if motion blur active
+    float motion_t0;   // Time value for v[] positions (from MotionBegin)
+    float motion_t1;   // Time value for v_t1[] positions (from MotionBegin)
     RhColor c[4];      // Per-vertex colors (for interpolation mode)
     RhColor o[4];      // Per-vertex opacities (for interpolation mode)
     RhColor center;    // Center color (for flat shading mode)
     RhColor center_opacity; // Center opacity (for flat shading mode)
-    int min_x, min_y;  // Screen-space bounding box
+    int min_x, min_y;  // Screen-space bounding box (union of t0 and t1)
     int max_x, max_y;
 } RhMicropolygon;
 
@@ -193,7 +184,14 @@ typedef struct {
     float dof_fstop;
     float dof_focallength;
     float dof_focaldistance;
-    
+
+    // Motion blur / Shutter
+    float shutter_open;      // Default: 0.0
+    float shutter_close;     // Default: 0.0 (no blur when equal)
+    bool motion_active;      // Inside MotionBegin/End block
+    int motion_sample_index; // 0 or 1 (which sample we're capturing)
+    float motion_times[2];   // Time values for each sample
+
     // State Stack
     RiAttributeState stack[MAX_STACK_DEPTH];
     int stack_ptr;
@@ -264,6 +262,20 @@ static RiAttributeState* curr() {
     return &g_ctx->stack[g_ctx->stack_ptr];
 }
 
+// Check if two matrices are approximately equal
+static bool rh_mat4_equal(RhMat4 a, RhMat4 b) {
+    const float eps = 1e-6f;
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            if (fabsf(a.m[i][j] - b.m[i][j]) > eps) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+
 static RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* transform, const RhColor* color) {
     RhRenderItem* item = (RhRenderItem*)malloc(sizeof(RhRenderItem));
     item->prim = *p;
@@ -272,7 +284,22 @@ static RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* t
         item->prim.data.polygon.vertices = (RhVec3*)malloc(p->data.polygon.count * sizeof(RhVec3));
         memcpy(item->prim.data.polygon.vertices, p->data.polygon.vertices, p->data.polygon.count * sizeof(RhVec3));
     }
+    // Deep copy primvars
+    if (p->num_primvars > 0 && p->primvars) {
+        item->prim.primvars = (RhPrimVar*)malloc(p->num_primvars * sizeof(RhPrimVar));
+        item->prim.num_primvars = p->num_primvars;
+        for (int i = 0; i < p->num_primvars; i++) {
+            rh_primvar_copy(&item->prim.primvars[i], &p->primvars[i]);
+        }
+    } else {
+        item->prim.primvars = NULL;
+        item->prim.num_primvars = 0;
+    }
     item->transform = *transform;
+    item->transform_t1 = curr()->transform_t1;
+    item->has_motion = curr()->has_motion;
+    item->motion_t0 = g_ctx->motion_times[0];
+    item->motion_t1 = g_ctx->motion_times[1];
     item->color = *color;
     item->shader = curr()->current_surface_shader;
     item->shader_params = curr()->current_shader_params;
@@ -285,7 +312,7 @@ static RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* t
         g_ctx->all_items = (RhRenderItem**)realloc(g_ctx->all_items, g_ctx->all_items_capacity * sizeof(RhRenderItem*));
     }
     g_ctx->all_items[g_ctx->all_items_count++] = item;
-    
+
     return item;
 }
 
@@ -324,9 +351,20 @@ static void ri_mpoly_list_free(RhMicropolygonList* list) {
     list->capacity = 0;
 }
 
-// Convert a shaded grid to micropolygons
+// Convert a shaded grid to micropolygons with motion blur support
 // Grid has width*height vertices = (width-1)*(height-1) micropolygon quads
-static void ri_grid_to_mpolys(const RhMicroGrid* grid, RhMicropolygonList* out_list, RhShadingMode mode) {
+// screen_pos: array of screen positions at t0
+// screen_pos_t1: array of screen positions at t1 (NULL if no motion blur)
+// has_motion: true if motion blur is active
+// motion_t0, motion_t1: time values from MotionBegin for remapping
+static void ri_grid_to_mpolys_motion(const RhMicroGrid* grid,
+                                      const RhVec3* screen_pos,
+                                      const RhVec3* screen_pos_t1,
+                                      bool has_motion,
+                                      float motion_t0,
+                                      float motion_t1,
+                                      RhMicropolygonList* out_list,
+                                      RhShadingMode mode) {
     int w = grid->width;
     int h = grid->height;
 
@@ -344,11 +382,28 @@ static void ri_grid_to_mpolys(const RhMicroGrid* grid, RhMicropolygonList* out_l
 
             RhMicropolygon mpoly;
 
-            // Copy screen-space positions (v[0]=TL, v[1]=TR, v[2]=BR, v[3]=BL)
-            mpoly.v[0] = grid->positions[i00];
-            mpoly.v[1] = grid->positions[i10];
-            mpoly.v[2] = grid->positions[i11];
-            mpoly.v[3] = grid->positions[i01];
+            // Copy screen-space positions at t0 (v[0]=TL, v[1]=TR, v[2]=BR, v[3]=BL)
+            mpoly.v[0] = screen_pos[i00];
+            mpoly.v[1] = screen_pos[i10];
+            mpoly.v[2] = screen_pos[i11];
+            mpoly.v[3] = screen_pos[i01];
+
+            // Copy screen-space positions at t1 for motion blur
+            mpoly.has_motion = has_motion;
+            mpoly.motion_t0 = motion_t0;
+            mpoly.motion_t1 = motion_t1;
+            if (has_motion && screen_pos_t1) {
+                mpoly.v_t1[0] = screen_pos_t1[i00];
+                mpoly.v_t1[1] = screen_pos_t1[i10];
+                mpoly.v_t1[2] = screen_pos_t1[i11];
+                mpoly.v_t1[3] = screen_pos_t1[i01];
+            } else {
+                // No motion: t1 positions same as t0
+                mpoly.v_t1[0] = mpoly.v[0];
+                mpoly.v_t1[1] = mpoly.v[1];
+                mpoly.v_t1[2] = mpoly.v[2];
+                mpoly.v_t1[3] = mpoly.v[3];
+            }
 
             // Copy per-vertex colors
             mpoly.c[0] = grid->colors[i00];
@@ -372,7 +427,7 @@ static void ri_grid_to_mpolys(const RhMicroGrid* grid, RhMicropolygonList* out_l
             mpoly.center_opacity.g = (mpoly.o[0].g + mpoly.o[1].g + mpoly.o[2].g + mpoly.o[3].g) * 0.25f;
             mpoly.center_opacity.b = (mpoly.o[0].b + mpoly.o[1].b + mpoly.o[2].b + mpoly.o[3].b) * 0.25f;
 
-            // Compute screen-space bounding box
+            // Compute screen-space bounding box (union of t0 and t1)
             float min_x = mpoly.v[0].x;
             float max_x = mpoly.v[0].x;
             float min_y = mpoly.v[0].y;
@@ -383,6 +438,16 @@ static void ri_grid_to_mpolys(const RhMicroGrid* grid, RhMicropolygonList* out_l
                 if (mpoly.v[k].x > max_x) max_x = mpoly.v[k].x;
                 if (mpoly.v[k].y < min_y) min_y = mpoly.v[k].y;
                 if (mpoly.v[k].y > max_y) max_y = mpoly.v[k].y;
+            }
+
+            // Include t1 positions in bounding box for motion blur
+            if (has_motion) {
+                for (int k = 0; k < 4; k++) {
+                    if (mpoly.v_t1[k].x < min_x) min_x = mpoly.v_t1[k].x;
+                    if (mpoly.v_t1[k].x > max_x) max_x = mpoly.v_t1[k].x;
+                    if (mpoly.v_t1[k].y < min_y) min_y = mpoly.v_t1[k].y;
+                    if (mpoly.v_t1[k].y > max_y) max_y = mpoly.v_t1[k].y;
+                }
             }
 
             // Store as integer bounds (floor min, ceil max for conservative coverage)
@@ -398,14 +463,42 @@ static void ri_grid_to_mpolys(const RhMicroGrid* grid, RhMicropolygonList* out_l
     }
 }
 
+
 // Edge function for rasterization - returns positive if (px,py) is to the right of edge (v0->v1)
 static inline float ri_edge_function(RhVec3 v0, RhVec3 v1, float px, float py) {
     return (px - v0.x) * (v1.y - v0.y) - (py - v0.y) * (v1.x - v0.x);
 }
 
+// Simple hash function for stratified temporal sampling
+// Returns a value in [0,1] based on pixel coordinates
+static inline float ri_temporal_hash(int x, int y, int ss_x, int ss_y) {
+    // Use subpixel position within the pixel sample grid for stratification
+    int sub_x = x % ss_x;
+    int sub_y = y % ss_y;
+    int sample_idx = sub_y * ss_x + sub_x;
+    int total_samples = ss_x * ss_y;
+
+    // Stratified time: jitter within each stratum
+    // Use a simple LCG-style hash for jitter
+    unsigned int hash = (unsigned int)(x * 73856093) ^ (unsigned int)(y * 19349663);
+    float jitter = (float)(hash & 0xFFFF) / 65536.0f;
+
+    return ((float)sample_idx + jitter) / (float)total_samples;
+}
+
+// Interpolate a vec3 between two positions based on time t in [0,1]
+static inline RhVec3 ri_vec3_lerp(RhVec3 a, RhVec3 b, float t) {
+    return rh_vec3_create(
+        a.x + t * (b.x - a.x),
+        a.y + t * (b.y - a.y),
+        a.z + t * (b.z - a.z)
+    );
+}
+
 // Rasterize a single micropolygon within the given clip bounds
 // mpoly vertex layout: v[0]=TL, v[1]=TR, v[2]=BR, v[3]=BL
 // Triangles: T1(v0, v1, v3) and T2(v1, v2, v3)
+// With motion blur: vertices are interpolated based on per-pixel stratified time
 static void ri_sample_mpoly(
     RhRasterizer* r,
     const RhMicropolygon* mpoly,
@@ -422,20 +515,67 @@ static void ri_sample_mpoly(
     // Early out if completely clipped
     if (x0 > x1 || y0 > y1) return;
 
-    // Get vertex references
-    RhVec3 v0 = mpoly->v[0]; // TL
-    RhVec3 v1 = mpoly->v[1]; // TR
-    RhVec3 v2 = mpoly->v[2]; // BR
-    RhVec3 v3 = mpoly->v[3]; // BL
+    // Check if motion blur is active
+    bool has_motion = mpoly->has_motion &&
+                      (g_ctx->shutter_close > g_ctx->shutter_open);
 
-    // Compute triangle areas
-    float area1 = ri_edge_function(v0, v1, v3.x, v3.y); // Triangle 1: v0, v1, v3
-    float area2 = ri_edge_function(v1, v2, v3.x, v3.y); // Triangle 2: v1, v2, v3
+    // If no motion blur, use static vertices
+    RhVec3 v0_base = mpoly->v[0]; // TL
+    RhVec3 v1_base = mpoly->v[1]; // TR
+    RhVec3 v2_base = mpoly->v[2]; // BR
+    RhVec3 v3_base = mpoly->v[3]; // BL
+
+    // For static case, compute areas once
+    float area1_static = 0, area2_static = 0;
+    if (!has_motion) {
+        area1_static = ri_edge_function(v0_base, v1_base, v3_base.x, v3_base.y);
+        area2_static = ri_edge_function(v1_base, v2_base, v3_base.x, v3_base.y);
+    }
 
     for (int y = y0; y <= y1; y++) {
         for (int x = x0; x <= x1; x++) {
             float px = x + 0.5f;
             float py = y + 0.5f;
+
+            // Get vertices, interpolating for motion blur
+            RhVec3 v0, v1, v2, v3;
+            float area1, area2;
+
+            if (has_motion) {
+                // Compute stratified time for this pixel (in [0,1])
+                float pixel_t = ri_temporal_hash(x, y, g_ctx->pixel_samples_x, g_ctx->pixel_samples_y);
+
+                // Map pixel sample time to world time via shutter interval
+                float world_time = g_ctx->shutter_open + pixel_t * (g_ctx->shutter_close - g_ctx->shutter_open);
+
+                // Remap world time to motion parameter space
+                float motion_range = mpoly->motion_t1 - mpoly->motion_t0;
+                float t;
+                if (fabsf(motion_range) < 1e-6f) {
+                    t = 0.0f;  // Degenerate case: motion times equal
+                } else {
+                    t = (world_time - mpoly->motion_t0) / motion_range;
+                    if (t < 0.0f) t = 0.0f;
+                    if (t > 1.0f) t = 1.0f;
+                }
+
+                // Interpolate vertices
+                v0 = ri_vec3_lerp(mpoly->v[0], mpoly->v_t1[0], t);
+                v1 = ri_vec3_lerp(mpoly->v[1], mpoly->v_t1[1], t);
+                v2 = ri_vec3_lerp(mpoly->v[2], mpoly->v_t1[2], t);
+                v3 = ri_vec3_lerp(mpoly->v[3], mpoly->v_t1[3], t);
+
+                // Compute triangle areas for interpolated vertices
+                area1 = ri_edge_function(v0, v1, v3.x, v3.y);
+                area2 = ri_edge_function(v1, v2, v3.x, v3.y);
+            } else {
+                v0 = v0_base;
+                v1 = v1_base;
+                v2 = v2_base;
+                v3 = v3_base;
+                area1 = area1_static;
+                area2 = area2_static;
+            }
 
             // --- Triangle 1 (v0, v1, v3) ---
             bool drawn = false;
@@ -532,7 +672,8 @@ static inline int ri_clamp_int(int val, int min_val, int max_val) {
 
 // Compute screen-space bounding box area for a primitive
 // Samples actual surface points within the current parametric domain
-static float ri_compute_screen_area(const RhPrimitive* p, const RhMat4* mvp) {
+// If mvp_t1 is provided (non-NULL), computes union of t0 and t1 bounds
+static float ri_compute_screen_area_motion(const RhPrimitive* p, const RhMat4* mvp, const RhMat4* mvp_t1) {
     float min_x = 1e30f, max_x = -1e30f;
     float min_y = 1e30f, max_y = -1e30f;
 
@@ -545,7 +686,7 @@ static float ri_compute_screen_area(const RhPrimitive* p, const RhMat4* mvp) {
             // Evaluate surface point at (u,v)
             RhVec3 pos_obj = rh_prim_eval_point(p, u, v);
 
-            // Project to screen space
+            // Project to screen space at t0
             RhVec3 p_ndc = rh_mat4_mul_point(*mvp, pos_obj);
             float rx = (p_ndc.x + 1.0f) * 0.5f * g_ctx->ss_xres;
             float ry = (1.0f - (p_ndc.y + 1.0f) * 0.5f) * g_ctx->ss_yres;
@@ -554,6 +695,18 @@ static float ri_compute_screen_area(const RhPrimitive* p, const RhMat4* mvp) {
             if (rx > max_x) max_x = rx;
             if (ry < min_y) min_y = ry;
             if (ry > max_y) max_y = ry;
+
+            // Also project at t1 for motion blur
+            if (mvp_t1) {
+                RhVec3 p_ndc_t1 = rh_mat4_mul_point(*mvp_t1, pos_obj);
+                float rx_t1 = (p_ndc_t1.x + 1.0f) * 0.5f * g_ctx->ss_xres;
+                float ry_t1 = (1.0f - (p_ndc_t1.y + 1.0f) * 0.5f) * g_ctx->ss_yres;
+
+                if (rx_t1 < min_x) min_x = rx_t1;
+                if (rx_t1 > max_x) max_x = rx_t1;
+                if (ry_t1 < min_y) min_y = ry_t1;
+                if (ry_t1 > max_y) max_y = ry_t1;
+            }
         }
     }
 
@@ -565,6 +718,11 @@ static float ri_compute_screen_area(const RhPrimitive* p, const RhMat4* mvp) {
     if (height < 0.0f) height = 0.0f;
 
     return width * height;
+}
+
+// Legacy wrapper for backward compatibility
+static float ri_compute_screen_area(const RhPrimitive* p, const RhMat4* mvp) {
+    return ri_compute_screen_area_motion(p, mvp, NULL);
 }
 
 static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, const RhColor* color) {
@@ -594,14 +752,29 @@ static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, con
     float min_x = (float)g_ctx->ss_xres, max_x = 0;
     float min_y = (float)g_ctx->ss_yres, max_y = 0;
 
+    // Project bounding box corners at t0
     for (int i = 0; i < 8; i++) {
         RhVec3 p_ndc = rh_mat4_mul_point(mvp, corners[i]);
         float rx = (p_ndc.x + 1.0f) * 0.5f * g_ctx->ss_xres;
         float ry = (1.0f - (p_ndc.y + 1.0f) * 0.5f) * g_ctx->ss_yres;
-        if (rx < min_x) min_x = rx; 
+        if (rx < min_x) min_x = rx;
         if (rx > max_x) max_x = rx;
-        if (ry < min_y) min_y = ry; 
+        if (ry < min_y) min_y = ry;
         if (ry > max_y) max_y = ry;
+    }
+
+    // For motion blur: also project at t1 and use union of bounds
+    if (item->has_motion) {
+        RhMat4 mvp_t1 = rh_mat4_mul(g_ctx->projection, rh_mat4_mul(g_ctx->view_matrix, item->transform_t1));
+        for (int i = 0; i < 8; i++) {
+            RhVec3 p_ndc = rh_mat4_mul_point(mvp_t1, corners[i]);
+            float rx = (p_ndc.x + 1.0f) * 0.5f * g_ctx->ss_xres;
+            float ry = (1.0f - (p_ndc.y + 1.0f) * 0.5f) * g_ctx->ss_yres;
+            if (rx < min_x) min_x = rx;
+            if (rx > max_x) max_x = rx;
+            if (ry < min_y) min_y = ry;
+            if (ry > max_y) max_y = ry;
+        }
     }
 
     int b_min_x = (int)floorf(min_x / g_ctx->bucket_size);
@@ -682,6 +855,8 @@ void RiBegin(RtToken name) {
     // Default State
     g_ctx->stack_ptr = 0;
     g_ctx->stack[0].transform = rh_mat4_identity();
+    g_ctx->stack[0].transform_t1 = rh_mat4_identity();
+    g_ctx->stack[0].has_motion = false;
     g_ctx->stack[0].color = (RhColor){1.0f, 1.0f, 1.0f};
     
     // Default Basis (Bezier)
@@ -716,6 +891,14 @@ void RiBegin(RtToken name) {
     g_ctx->dof_fstop = RI_INFINITY;
     g_ctx->dof_focallength = 1.0f;
     g_ctx->dof_focaldistance = 1.0f;
+
+    // Default motion blur (no blur)
+    g_ctx->shutter_open = 0.0f;
+    g_ctx->shutter_close = 0.0f;
+    g_ctx->motion_active = false;
+    g_ctx->motion_sample_index = 0;
+    g_ctx->motion_times[0] = 0.0f;
+    g_ctx->motion_times[1] = 0.0f;
 
     // Initialize variable declaration table with standard declarations
     g_ctx->num_declarations = 0;
@@ -776,22 +959,6 @@ static RiVarType ri_parse_var_type(const char* str) {
     if (strcmp(str, "hpoint") == 0) return RI_TYPE_HPOINT;
     if (strcmp(str, "matrix") == 0) return RI_TYPE_MATRIX;
     return RI_TYPE_FLOAT;  // Default
-}
-
-// Get component count for a given type
-static int ri_type_component_count(RiVarType type) {
-    switch (type) {
-        case RI_TYPE_FLOAT:   return 1;
-        case RI_TYPE_INTEGER: return 1;
-        case RI_TYPE_STRING:  return 1;
-        case RI_TYPE_COLOR:   return 3;
-        case RI_TYPE_POINT:   return 3;
-        case RI_TYPE_VECTOR:  return 3;
-        case RI_TYPE_NORMAL:  return 3;
-        case RI_TYPE_HPOINT:  return 4;
-        case RI_TYPE_MATRIX:  return 16;
-        default:              return 1;
-    }
 }
 
 // Internal helper to add a declaration
@@ -955,34 +1122,30 @@ const RiDeclaration* ri_lookup_declaration(const char* name) {
 // Get total float count for a declaration (components * array_size)
 int ri_declaration_float_count(const RiDeclaration* decl) {
     if (!decl) return 0;
-    return ri_type_component_count(decl->type) * decl->array_size;
+    return rh_type_component_count(decl->type) * decl->array_size;
 }
 
 // --- 2. Options ---
 
-void RiOption(RtToken name, ...) {
+void RiOptionV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
     if (!g_ctx) return;
 
-    va_list ap;
-    va_start(ap, name);
-
     if (strcmp(name, "statistics") == 0) {
-        // Parse statistics options
-        RtToken param;
-        while ((param = va_arg(ap, RtToken)) != RI_NULL) {
-            if (strcmp(param, "endofframe") == 0) {
-                RtInt* val = va_arg(ap, RtInt*);
+        for (int i = 0; i < count; i++) {
+            if (!tokens[i]) continue;
+            if (strcmp(tokens[i], "endofframe") == 0) {
+                RtInt* val = (RtInt*)values[i];
                 g_ctx->stats_options.endofframe = *val;
-            } else if (strcmp(param, "filename") == 0) {
-                RtToken filename = va_arg(ap, RtToken);
+            } else if (strcmp(tokens[i], "filename") == 0) {
+                RtToken filename = (RtToken)values[i];
                 if (filename) {
                     strncpy(g_ctx->stats_options.filename, filename, 255);
                     g_ctx->stats_options.filename[255] = '\0';
                 } else {
                     g_ctx->stats_options.filename[0] = '\0';
                 }
-            } else if (strcmp(param, "jsonfilename") == 0) {
-                RtToken filename = va_arg(ap, RtToken);
+            } else if (strcmp(tokens[i], "jsonfilename") == 0) {
+                RtToken filename = (RtToken)values[i];
                 if (filename) {
                     strncpy(g_ctx->stats_options.jsonfilename, filename, 255);
                     g_ctx->stats_options.jsonfilename[255] = '\0';
@@ -992,8 +1155,26 @@ void RiOption(RtToken name, ...) {
             }
         }
     }
+}
 
+void RiOption(RtToken name, ...) {
+    if (!g_ctx) return;
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, name);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
     va_end(ap);
+
+    RiOptionV(name, tokens, values, count);
 }
 
 void RiFormat(RtInt xresolution, RtInt yresolution, RtFloat pixelaspectratio) {
@@ -1003,7 +1184,7 @@ void RiFormat(RtInt xresolution, RtInt yresolution, RtFloat pixelaspectratio) {
     (void)pixelaspectratio;
 }
 
-void RiDisplay(RtToken name, RtToken type, RtToken mode, ...) {
+void RiDisplayV(RtToken name, RtToken type, RtToken mode, RtToken* tokens, RtPointer* values, int count) {
     if (!g_ctx) return;
     if (name) strncpy(g_ctx->display_name, name, 255);
 
@@ -1017,7 +1198,30 @@ void RiDisplay(RtToken name, RtToken type, RtToken mode, ...) {
         // Other modes (z, etc.) not yet supported
     }
 
-    (void)type;  // "file" is the only supported type
+    (void)type;    // "file" is the only supported type
+    (void)tokens;  // Currently unused
+    (void)values;
+    (void)count;
+}
+
+void RiDisplay(RtToken name, RtToken type, RtToken mode, ...) {
+    if (!g_ctx) return;
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, mode);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    RiDisplayV(name, type, mode, tokens, values, count);
 }
 
 void RiPixelSamples(RtFloat xsamples, RtFloat ysamples) {
@@ -1040,27 +1244,34 @@ void RiDepthOfField(RtFloat fstop, RtFloat focallength, RtFloat focaldistance) {
     g_ctx->dof_focaldistance = focaldistance;
 }
 
-void RiProjection(RtToken name, ...) {
+void RiShutter(RtFloat open, RtFloat close) {
     if (!g_ctx) return;
-    // For MVP, we assume "perspective" and hardcode/parse FOV.
-    // Let's assume va_list contains "fov" if name is perspective.
-    // For now, hardcode a standard perspective matrix for simplicity or parse simple args.
-    
-    va_list ap;
-    va_start(ap, name);
-    
+    g_ctx->shutter_open = open;
+    g_ctx->shutter_close = close;
+}
+
+void RiProjectionV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
+    if (!g_ctx) return;
+
+    float fov = 45.0f;  // Default FOV
+
+    // Look for "fov" parameter
+    for (int i = 0; i < count; i++) {
+        if (tokens[i] && strcmp(tokens[i], "fov") == 0) {
+            RtFloat* fov_ptr = (RtFloat*)values[i];
+            if (fov_ptr) fov = *fov_ptr;
+            break;
+        }
+    }
+
     if (strcmp(name, "perspective") == 0) {
-        // RenderMan standard: RiProjection("perspective", "fov", &fov, RI_NULL);
-        // We'll cheat and make a standard one.
-        // float fov = 45.0f; // Default
-        
         // Construct Projection Matrix
-        float fov_rad = 45.0f * (RH_PI / 180.0f);
+        float fov_rad = fov * (RH_PI / 180.0f);
         float aspect = (float)g_ctx->xres / (float)g_ctx->yres;
         float f = 1.0f / tanf(fov_rad / 2.0f);
         float zNear = 0.1f;
         float zFar = 100.0f;
-        
+
         g_ctx->projection = rh_mat4_identity();
         g_ctx->projection.m[0][0] = f / aspect;
         g_ctx->projection.m[1][1] = f;
@@ -1072,8 +1283,26 @@ void RiProjection(RtToken name, ...) {
         // Identity / Scale
         g_ctx->projection = rh_mat4_identity();
     }
-    
+}
+
+void RiProjection(RtToken name, ...) {
+    if (!g_ctx) return;
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, name);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
     va_end(ap);
+
+    RiProjectionV(name, tokens, values, count);
 }
 
 // --- 3. Graphics State ---
@@ -1113,11 +1342,81 @@ void RiAttributeEnd(void) {
     g_ctx->stack_ptr--;
 }
 
+// --- Motion Blur ---
+
+void RiMotionBeginV(RtInt n, RtFloat* times) {
+    if (!g_ctx) return;
+    if (n != 2) {
+        fprintf(stderr, "Warning: RiMotionBegin only supports n=2 (two-sample motion)\n");
+        return;
+    }
+    if (g_ctx->motion_active) {
+        fprintf(stderr, "Warning: Nested MotionBegin blocks not supported\n");
+        return;
+    }
+
+    g_ctx->motion_active = true;
+    g_ctx->motion_sample_index = 0;
+
+    // Store times directly - remapping to shutter interval happens in rasterization
+    g_ctx->motion_times[0] = times[0];
+    g_ctx->motion_times[1] = times[1];
+
+    // Save the current transform as the starting point for both
+    // The first transform call will update transform (t0)
+    // The second will update transform_t1
+    curr()->transform_t1 = curr()->transform;
+}
+
+void RiMotionBegin(RtInt n, ...) {
+    if (!g_ctx) return;
+    if (n != 2) {
+        fprintf(stderr, "Warning: RiMotionBegin only supports n=2 (two-sample motion)\n");
+        return;
+    }
+
+    RtFloat times[2];
+    va_list ap;
+    va_start(ap, n);
+    for (int i = 0; i < n; i++) {
+        times[i] = (RtFloat)va_arg(ap, double);
+    }
+    va_end(ap);
+
+    RiMotionBeginV(n, times);
+}
+
+void RiMotionEnd(void) {
+    if (!g_ctx) return;
+    if (!g_ctx->motion_active) {
+        fprintf(stderr, "Warning: RiMotionEnd without RiMotionBegin\n");
+        return;
+    }
+
+    g_ctx->motion_active = false;
+    g_ctx->motion_sample_index = 0;
+
+    // Mark that this attribute state has motion if transforms differ
+    if (!rh_mat4_equal(curr()->transform, curr()->transform_t1)) {
+        curr()->has_motion = true;
+    }
+}
+
 // --- 4. Transformations ---
 
 void RiIdentity(void) {
     if (!g_ctx) return;
-    curr()->transform = rh_mat4_identity();
+    if (g_ctx->motion_active) {
+        if (g_ctx->motion_sample_index == 0) {
+            curr()->transform = rh_mat4_identity();
+        } else {
+            curr()->transform_t1 = rh_mat4_identity();
+        }
+        g_ctx->motion_sample_index++;
+    } else {
+        curr()->transform = rh_mat4_identity();
+        curr()->transform_t1 = rh_mat4_identity();
+    }
 }
 
 void RiTransform(RtMatrix transform) {
@@ -1125,7 +1424,17 @@ void RiTransform(RtMatrix transform) {
     // Copy RtMatrix to RhMat4
     RhMat4 m;
     memcpy(m.m, transform, sizeof(RtMatrix));
-    curr()->transform = m;
+    if (g_ctx->motion_active) {
+        if (g_ctx->motion_sample_index == 0) {
+            curr()->transform = m;
+        } else {
+            curr()->transform_t1 = m;
+        }
+        g_ctx->motion_sample_index++;
+    } else {
+        curr()->transform = m;
+        curr()->transform_t1 = m;
+    }
 }
 
 void RiConcatTransform(RtMatrix transform) {
@@ -1133,39 +1442,79 @@ void RiConcatTransform(RtMatrix transform) {
     RhMat4 m;
     memcpy(m.m, transform, sizeof(RtMatrix));
     // Standard RenderMan: CTM = CTM * transform
-    curr()->transform = rh_mat4_mul(curr()->transform, m);
+    if (g_ctx->motion_active) {
+        if (g_ctx->motion_sample_index == 0) {
+            curr()->transform = rh_mat4_mul(curr()->transform, m);
+        } else {
+            curr()->transform_t1 = rh_mat4_mul(curr()->transform_t1, m);
+        }
+        g_ctx->motion_sample_index++;
+    } else {
+        curr()->transform = rh_mat4_mul(curr()->transform, m);
+        curr()->transform_t1 = curr()->transform;
+    }
 }
 
 void RiTranslate(RtFloat dx, RtFloat dy, RtFloat dz) {
     if (!g_ctx) return;
     RhMat4 m = rh_mat4_translate(dx, dy, dz);
-    curr()->transform = rh_mat4_mul(curr()->transform, m);
+    if (g_ctx->motion_active) {
+        if (g_ctx->motion_sample_index == 0) {
+            curr()->transform = rh_mat4_mul(curr()->transform, m);
+        } else {
+            curr()->transform_t1 = rh_mat4_mul(curr()->transform_t1, m);
+        }
+        g_ctx->motion_sample_index++;
+    } else {
+        curr()->transform = rh_mat4_mul(curr()->transform, m);
+        curr()->transform_t1 = curr()->transform;
+    }
 }
 
 void RiRotate(RtFloat angle, RtFloat dx, RtFloat dy, RtFloat dz) {
     if (!g_ctx) return;
-    
+
     float rad = angle * (RH_PI / 180.0f);
     float c = cosf(rad);
     float s = sinf(rad);
     float inv_c = 1.0f - c;
-    
+
     // Normalize axis
     float len = sqrtf(dx*dx + dy*dy + dz*dz);
     if (len > 0) { dx/=len; dy/=len; dz/=len; }
-    
+
     RhMat4 m = rh_mat4_identity();
     m.m[0][0] = dx*dx*inv_c + c;    m.m[0][1] = dx*dy*inv_c - dz*s; m.m[0][2] = dx*dz*inv_c + dy*s;
     m.m[1][0] = dy*dx*inv_c + dz*s; m.m[1][1] = dy*dy*inv_c + c;    m.m[1][2] = dy*dz*inv_c - dx*s;
     m.m[2][0] = dz*dx*inv_c - dy*s; m.m[2][1] = dz*dy*inv_c + dx*s; m.m[2][2] = dz*dz*inv_c + c;
-    
-    curr()->transform = rh_mat4_mul(curr()->transform, m);
+
+    if (g_ctx->motion_active) {
+        if (g_ctx->motion_sample_index == 0) {
+            curr()->transform = rh_mat4_mul(curr()->transform, m);
+        } else {
+            curr()->transform_t1 = rh_mat4_mul(curr()->transform_t1, m);
+        }
+        g_ctx->motion_sample_index++;
+    } else {
+        curr()->transform = rh_mat4_mul(curr()->transform, m);
+        curr()->transform_t1 = curr()->transform;
+    }
 }
 
 void RiScale(RtFloat sx, RtFloat sy, RtFloat sz) {
     if (!g_ctx) return;
     RhMat4 m = rh_mat4_scale(sx, sy, sz);
-    curr()->transform = rh_mat4_mul(curr()->transform, m);
+    if (g_ctx->motion_active) {
+        if (g_ctx->motion_sample_index == 0) {
+            curr()->transform = rh_mat4_mul(curr()->transform, m);
+        } else {
+            curr()->transform_t1 = rh_mat4_mul(curr()->transform_t1, m);
+        }
+        g_ctx->motion_sample_index++;
+    } else {
+        curr()->transform = rh_mat4_mul(curr()->transform, m);
+        curr()->transform_t1 = curr()->transform;
+    }
 }
 
 void RiBasis(RtMatrix ubasis, RtInt ustep, RtMatrix vbasis, RtInt vstep) {
@@ -1477,7 +1826,7 @@ void RiWorldEnd(void) {
 
 // --- 8. Lighting ---
 
-RtToken RiLightSource(RtToken name, ...) {
+RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
     if (!g_ctx || g_ctx->num_lights >= MAX_LIGHTS) return RI_NULL;
 
     RhLight* l = &g_ctx->lights[g_ctx->num_lights];
@@ -1495,38 +1844,34 @@ RtToken RiLightSource(RtToken name, ...) {
     l->conedeltaangle = 5.0f;
     l->beamdistribution = 2.0f;
 
-    // Parse arguments
-    va_list ap;
-    va_start(ap, name);
-
-    RtToken token;
-    while ((token = va_arg(ap, RtToken)) != RI_NULL) {
-        if (strcmp(token, "intensity") == 0) {
-            RtFloat* val = va_arg(ap, RtFloat*);
+    // Parse arguments from token/value arrays
+    for (int i = 0; i < count; i++) {
+        if (!tokens[i]) continue;
+        if (strcmp(tokens[i], "intensity") == 0) {
+            RtFloat* val = (RtFloat*)values[i];
             l->intensity = *val;
-        } else if (strcmp(token, "lightcolor") == 0) {
-            RtColor* col = va_arg(ap, RtColor*);
+        } else if (strcmp(tokens[i], "lightcolor") == 0) {
+            RtColor* col = (RtColor*)values[i];
             l->color.r = (*col)[0];
             l->color.g = (*col)[1];
             l->color.b = (*col)[2];
-        } else if (strcmp(token, "from") == 0) {
-            RtPoint* p = va_arg(ap, RtPoint*);
+        } else if (strcmp(tokens[i], "from") == 0) {
+            RtPoint* p = (RtPoint*)values[i];
             l->position = rh_vec3_create((*p)[0], (*p)[1], (*p)[2]);
-        } else if (strcmp(token, "to") == 0) {
-            RtPoint* p = va_arg(ap, RtPoint*);
+        } else if (strcmp(tokens[i], "to") == 0) {
+            RtPoint* p = (RtPoint*)values[i];
             to = rh_vec3_create((*p)[0], (*p)[1], (*p)[2]);
-        } else if (strcmp(token, "coneangle") == 0) {
-            RtFloat* val = va_arg(ap, RtFloat*);
+        } else if (strcmp(tokens[i], "coneangle") == 0) {
+            RtFloat* val = (RtFloat*)values[i];
             l->coneangle = *val;
-        } else if (strcmp(token, "conedeltaangle") == 0) {
-            RtFloat* val = va_arg(ap, RtFloat*);
+        } else if (strcmp(tokens[i], "conedeltaangle") == 0) {
+            RtFloat* val = (RtFloat*)values[i];
             l->conedeltaangle = *val;
-        } else if (strcmp(token, "beamdistribution") == 0) {
-            RtFloat* val = va_arg(ap, RtFloat*);
+        } else if (strcmp(tokens[i], "beamdistribution") == 0) {
+            RtFloat* val = (RtFloat*)values[i];
             l->beamdistribution = *val;
         }
     }
-    va_end(ap);
 
     // Calculate direction for distant/spotlight
     l->direction = rh_vec3_normalize(rh_vec3_sub(l->position, to));
@@ -1537,6 +1882,26 @@ RtToken RiLightSource(RtToken name, ...) {
     l->direction = rh_vec3_normalize(rh_vec3_sub(l->position, to_world));
 
     return RI_NULL;
+}
+
+RtToken RiLightSource(RtToken name, ...) {
+    if (!g_ctx || g_ctx->num_lights >= MAX_LIGHTS) return RI_NULL;
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, name);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    return RiLightSourceV(name, tokens, values, count);
 }
 
 void RiIlluminate(RtToken light, RtBoolean onoff) {
@@ -1593,8 +1958,15 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
     RhMat4 mvp = rh_mat4_mul(g_ctx->projection,
                   rh_mat4_mul(g_ctx->view_matrix, item->transform));
 
-    // Compute screen-space bounding box area
-    float screen_area = ri_compute_screen_area(p, &mvp);
+    // Compute screen-space bounding box area (using motion bounds if applicable)
+    float screen_area;
+    if (item->has_motion) {
+        RhMat4 mvp_t1 = rh_mat4_mul(g_ctx->projection,
+                          rh_mat4_mul(g_ctx->view_matrix, item->transform_t1));
+        screen_area = ri_compute_screen_area_motion(p, &mvp, &mvp_t1);
+    } else {
+        screen_area = ri_compute_screen_area(p, &mvp);
+    }
 
     // Adjust area threshold for supersampling and shading rate
     float ss_factor = (float)(g_ctx->pixel_samples_x * g_ctx->pixel_samples_y);
@@ -1635,6 +2007,8 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
 
         // Matrices
         RhMat4 model = item->transform;
+        RhMat4 model_t1 = item->transform_t1;
+        bool has_motion = item->has_motion;
         RhMat4 view = g_ctx->view_matrix;
         RhMat4 proj = g_ctx->projection;
 
@@ -1654,6 +2028,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
 
         // Temporary arrays for two-pass shading (needed for screen-space derivatives)
         RhVec3* screen_pos = (RhVec3*)malloc(gridSize * gridSize * sizeof(RhVec3));
+        RhVec3* screen_pos_t1 = has_motion ? (RhVec3*)malloc(gridSize * gridSize * sizeof(RhVec3)) : NULL;
         RhVec3* cam_positions = (RhVec3*)malloc(gridSize * gridSize * sizeof(RhVec3));
         RhVec3* cam_normals = (RhVec3*)malloc(gridSize * gridSize * sizeof(RhVec3));
 
@@ -1662,7 +2037,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             RhVec3 pos_obj = grid->positions[i];
             RhVec3 norm_obj = grid->normals[i];
 
-            // Obj -> World
+            // Obj -> World (at t0)
             RhVec3 pos_world = rh_mat4_mul_point(model, pos_obj);
             RhVec3 norm_world = rh_mat4_mul_dir(model_inv_tr, norm_obj);
             norm_world = rh_vec3_normalize(norm_world);
@@ -1671,11 +2046,21 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             cam_positions[i] = rh_mat4_mul_point(view, pos_world);
             cam_normals[i] = rh_vec3_normalize(rh_mat4_mul_dir(view, norm_world));
 
-            // Camera -> NDC -> Screen
+            // Camera -> NDC -> Screen (at t0)
             RhVec3 pos_ndc = rh_mat4_mul_point(proj, cam_positions[i]);
             float rx = (pos_ndc.x + 1.0f) * 0.5f * g_ctx->ss_xres;
             float ry = (1.0f - (pos_ndc.y + 1.0f) * 0.5f) * g_ctx->ss_yres;
             screen_pos[i] = rh_vec3_create(rx, ry, pos_ndc.z);
+
+            // Also compute screen position at t1 for motion blur
+            if (has_motion) {
+                RhVec3 pos_world_t1 = rh_mat4_mul_point(model_t1, pos_obj);
+                RhVec3 pos_cam_t1 = rh_mat4_mul_point(view, pos_world_t1);
+                RhVec3 pos_ndc_t1 = rh_mat4_mul_point(proj, pos_cam_t1);
+                float rx_t1 = (pos_ndc_t1.x + 1.0f) * 0.5f * g_ctx->ss_xres;
+                float ry_t1 = (1.0f - (pos_ndc_t1.y + 1.0f) * 0.5f) * g_ctx->ss_yres;
+                screen_pos_t1[i] = rh_vec3_create(rx_t1, ry_t1, pos_ndc_t1.z);
+            }
         }
 
         // Second pass: shade with proper screen-space texture derivatives
@@ -1764,6 +2149,11 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             ctx.grid_ptr = (void*)(intptr_t)(g_ctx->grid_counter);
             ctx.vertex_index = i;
 
+            // Pass primvars from the primitive to the shader context
+            // For UNIFORM primvars, these are constant across the entire primitive
+            ctx.primvars = item->prim.primvars;
+            ctx.num_primvars = item->prim.num_primvars;
+
             // Texture coordinates from grid
             ctx.u = grid->u_coords[i];
             ctx.v = grid->v_coords[i];
@@ -1782,15 +2172,19 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
 
             grid->colors[i] = ctx.Ci;
             grid->opacities[i] = ctx.Oi;
-            grid->positions[i] = screen_pos[i];
+            // Note: screen positions are passed separately to ri_grid_to_mpolys_motion
         }
 
-        free(screen_pos);
         free(cam_positions);
         free(cam_normals);
 
         // Convert grid to micropolygons instead of direct rasterization
-        ri_grid_to_mpolys(grid, out_mpolys, mode);
+        // Pass motion blur screen positions if available
+        ri_grid_to_mpolys_motion(grid, screen_pos, screen_pos_t1, has_motion,
+                                 item->motion_t0, item->motion_t1, out_mpolys, mode);
+
+        free(screen_pos);
+        if (screen_pos_t1) free(screen_pos_t1);
 
         rh_grid_destroy(grid);
         g_ctx->grid_counter++;
@@ -1798,118 +2192,425 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
 }
 
 
-void RiSphere(RtFloat radius, RtFloat zmin, RtFloat zmax, RtFloat tmax, ...) {
+// --- Primvar Parsing Helper ---
+// Parse token/value arrays and attach primvars to a primitive
+// Returns 1 on success, 0 on failure
+
+static int ri_parse_primvars(RhPrimitive* prim, RtToken* tokens, RtPointer* values, int count) {
+    if (!prim || count <= 0) return 1;  // Nothing to parse is success
+
+    // Count how many user-defined primvars we have
+    int num_primvars = 0;
+    for (int i = 0; i < count; i++) {
+        if (!tokens[i]) continue;
+
+        // Skip standard geometric variables that are handled elsewhere
+        // P, N, Cs, Os, s, t, st are typically handled by the primitive itself
+        if (strcmp(tokens[i], "P") == 0 ||
+            strcmp(tokens[i], "N") == 0 ||
+            strcmp(tokens[i], "Np") == 0 ||
+            strcmp(tokens[i], "s") == 0 ||
+            strcmp(tokens[i], "t") == 0 ||
+            strcmp(tokens[i], "st") == 0) {
+            continue;
+        }
+
+        const RiDeclaration* decl = ri_lookup_declaration(tokens[i]);
+        if (decl) {
+            num_primvars++;
+        }
+    }
+
+    if (num_primvars == 0) return 1;  // No primvars to add
+
+    // Allocate primvar array
+    prim->primvars = (RhPrimVar*)malloc(num_primvars * sizeof(RhPrimVar));
+    if (!prim->primvars) return 0;
+    prim->num_primvars = 0;
+
+    // Parse each token/value pair
+    for (int i = 0; i < count; i++) {
+        if (!tokens[i]) continue;
+
+        // Skip standard geometric variables
+        if (strcmp(tokens[i], "P") == 0 ||
+            strcmp(tokens[i], "N") == 0 ||
+            strcmp(tokens[i], "Np") == 0 ||
+            strcmp(tokens[i], "s") == 0 ||
+            strcmp(tokens[i], "t") == 0 ||
+            strcmp(tokens[i], "st") == 0) {
+            continue;
+        }
+
+        const RiDeclaration* decl = ri_lookup_declaration(tokens[i]);
+        if (!decl) continue;
+
+        RhPrimVar* pv = &prim->primvars[prim->num_primvars];
+        strncpy(pv->name, decl->name, sizeof(pv->name) - 1);
+        pv->name[sizeof(pv->name) - 1] = '\0';
+        pv->sclass = decl->sclass;
+        pv->type = decl->type;
+
+        // For now, we support UNIFORM/CONSTANT storage class (single value)
+        // VARYING/VERTEX would need interpolation support
+        pv->count = decl->array_size;
+
+        // Calculate data size and copy
+        size_t component_count = rh_type_component_count(decl->type);
+        size_t element_size;
+        if (decl->type == RI_TYPE_STRING) {
+            element_size = sizeof(char*);
+        } else if (decl->type == RI_TYPE_INTEGER) {
+            element_size = sizeof(int);
+        } else {
+            element_size = sizeof(float) * component_count;
+        }
+        size_t total_size = element_size * decl->array_size;
+
+        pv->data = malloc(total_size);
+        if (pv->data) {
+            if (decl->type == RI_TYPE_STRING) {
+                // Copy string pointers and duplicate strings
+                char** dst_strings = (char**)pv->data;
+                char** src_strings = (char**)values[i];
+                for (int j = 0; j < decl->array_size; j++) {
+                    if (src_strings && src_strings[j]) {
+                        dst_strings[j] = strdup(src_strings[j]);
+                    } else if (values[i]) {
+                        // Single string passed directly
+                        dst_strings[j] = strdup((char*)values[i]);
+                    } else {
+                        dst_strings[j] = NULL;
+                    }
+                }
+            } else {
+                memcpy(pv->data, values[i], total_size);
+            }
+            prim->num_primvars++;
+        }
+    }
+
+    return 1;
+}
+
+// --- Primitive V Functions ---
+
+void RiSphereV(RtFloat radius, RtFloat zmin, RtFloat zmax, RtFloat tmax,
+               RtToken* tokens, RtPointer* values, int count) {
     if (!g_ctx) return;
     RhPrimitive p = rh_prim_create_sphere(radius, zmin, zmax, 0.0f, tmax);
+    ri_parse_primvars(&p, tokens, values, count);
+    ri_add_geometry(&p);
+    rh_prim_free_data(&p);
+}
+
+void RiSphere(RtFloat radius, RtFloat zmin, RtFloat zmax, RtFloat tmax, ...) {
+    if (!g_ctx) return;
+
+    // Build token/value arrays from varargs
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, tmax);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    RiSphereV(radius, zmin, zmax, tmax, tokens, values, count);
+}
+
+void RiCylinderV(RtFloat radius, RtFloat zmin, RtFloat zmax, RtFloat tmax,
+                 RtToken* tokens, RtPointer* values, int count) {
+    if (!g_ctx) return;
+    RhPrimitive p = rh_prim_create_cylinder(radius, zmin, zmax, tmax);
+    ri_parse_primvars(&p, tokens, values, count);
     ri_add_geometry(&p);
     rh_prim_free_data(&p);
 }
 
 void RiCylinder(RtFloat radius, RtFloat zmin, RtFloat zmax, RtFloat tmax, ...) {
     if (!g_ctx) return;
-    RhPrimitive p = rh_prim_create_cylinder(radius, zmin, zmax, tmax);
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, tmax);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    RiCylinderV(radius, zmin, zmax, tmax, tokens, values, count);
+}
+
+void RiConeV(RtFloat height, RtFloat radius, RtFloat tmax,
+             RtToken* tokens, RtPointer* values, int count) {
+    if (!g_ctx) return;
+    RhPrimitive p = rh_prim_create_cone(height, radius, tmax);
+    ri_parse_primvars(&p, tokens, values, count);
     ri_add_geometry(&p);
     rh_prim_free_data(&p);
 }
 
 void RiCone(RtFloat height, RtFloat radius, RtFloat tmax, ...) {
     if (!g_ctx) return;
-    RhPrimitive p = rh_prim_create_cone(height, radius, tmax);
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, tmax);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    RiConeV(height, radius, tmax, tokens, values, count);
+}
+
+void RiParaboloidV(RtFloat rmax, RtFloat zmin, RtFloat zmax, RtFloat tmax,
+                   RtToken* tokens, RtPointer* values, int count) {
+    if (!g_ctx) return;
+    RhPrimitive p = rh_prim_create_paraboloid(rmax, zmin, zmax, tmax);
+    ri_parse_primvars(&p, tokens, values, count);
     ri_add_geometry(&p);
     rh_prim_free_data(&p);
 }
 
 void RiParaboloid(RtFloat rmax, RtFloat zmin, RtFloat zmax, RtFloat tmax, ...) {
     if (!g_ctx) return;
-    RhPrimitive p = rh_prim_create_paraboloid(rmax, zmin, zmax, tmax);
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, tmax);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    RiParaboloidV(rmax, zmin, zmax, tmax, tokens, values, count);
+}
+
+void RiDiskV(RtFloat height, RtFloat radius, RtFloat tmax,
+             RtToken* tokens, RtPointer* values, int count) {
+    if (!g_ctx) return;
+    RhPrimitive p = rh_prim_create_disk(height, radius, tmax);
+    ri_parse_primvars(&p, tokens, values, count);
     ri_add_geometry(&p);
     rh_prim_free_data(&p);
 }
 
 void RiDisk(RtFloat height, RtFloat radius, RtFloat tmax, ...) {
     if (!g_ctx) return;
-    RhPrimitive p = rh_prim_create_disk(height, radius, tmax);
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, tmax);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    RiDiskV(height, radius, tmax, tokens, values, count);
+}
+
+void RiTorusV(RtFloat majorradius, RtFloat minorradius, RtFloat phimin, RtFloat phimax, RtFloat tmax,
+              RtToken* tokens, RtPointer* values, int count) {
+    if (!g_ctx) return;
+    RhPrimitive p = rh_prim_create_torus(majorradius, minorradius, phimin, phimax, tmax);
+    ri_parse_primvars(&p, tokens, values, count);
     ri_add_geometry(&p);
     rh_prim_free_data(&p);
 }
 
 void RiTorus(RtFloat majorradius, RtFloat minorradius, RtFloat phimin, RtFloat phimax, RtFloat tmax, ...) {
     if (!g_ctx) return;
-    RhPrimitive p = rh_prim_create_torus(majorradius, minorradius, phimin, phimax, tmax);
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, tmax);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    RiTorusV(majorradius, minorradius, phimin, phimax, tmax, tokens, values, count);
+}
+
+void RiHyperboloidV(RtPoint point1, RtPoint point2, RtFloat tmax,
+                    RtToken* tokens, RtPointer* values, int count) {
+    if (!g_ctx) return;
+    RhVec3 p1 = rh_vec3_create(point1[0], point1[1], point1[2]);
+    RhVec3 p2 = rh_vec3_create(point2[0], point2[1], point2[2]);
+    RhPrimitive p = rh_prim_create_hyperboloid(p1, p2, tmax);
+    ri_parse_primvars(&p, tokens, values, count);
     ri_add_geometry(&p);
     rh_prim_free_data(&p);
 }
 
 void RiHyperboloid(RtPoint point1, RtPoint point2, RtFloat tmax, ...) {
     if (!g_ctx) return;
-    RhVec3 p1 = rh_vec3_create(point1[0], point1[1], point1[2]);
-    RhVec3 p2 = rh_vec3_create(point2[0], point2[1], point2[2]);
-    RhPrimitive p = rh_prim_create_hyperboloid(p1, p2, tmax);
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, tmax);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    RiHyperboloidV(point1, point2, tmax, tokens, values, count);
+}
+
+void RiPolygonV(RtInt nvertices, RtToken* tokens, RtPointer* values, int count) {
+    if (!g_ctx) return;
+
+    // Find the "P" parameter
+    RtPoint* points = NULL;
+    for (int i = 0; i < count; i++) {
+        if (tokens[i] && strcmp(tokens[i], "P") == 0) {
+            points = (RtPoint*)values[i];
+            break;
+        }
+    }
+
+    if (!points) return;
+
+    // Convert RtPoint (float[3]) to RhVec3
+    RhVec3* verts = (RhVec3*)malloc(nvertices * sizeof(RhVec3));
+    if (!verts) return;
+
+    for (int i = 0; i < nvertices; i++) {
+        verts[i].x = points[i][0];
+        verts[i].y = points[i][1];
+        verts[i].z = points[i][2];
+    }
+
+    RhPrimitive p = rh_prim_create_polygon(nvertices, verts);
+    ri_parse_primvars(&p, tokens, values, count);
     ri_add_geometry(&p);
     rh_prim_free_data(&p);
+    free(verts);
 }
 
 void RiPolygon(RtInt nvertices, ...) {
     if (!g_ctx) return;
-    
-    // Variadic args: expects RI_P, RtPoint array, RI_NULL
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
     va_list ap;
     va_start(ap, nvertices);
-    
-    // Simple parser: Assume first token is "P" and second is array
-    RtToken token = va_arg(ap, RtToken);
-    if (token && strcmp(token, "P") == 0) {
-        RtPoint* points = va_arg(ap, RtPoint*);
-        // Convert RtPoint (float[3]) to RhVec3
-        RhVec3* verts = (RhVec3*)malloc(nvertices * sizeof(RhVec3));
-        for(int i=0; i<nvertices; i++) {
-            verts[i].x = points[i][0];
-            verts[i].y = points[i][1];
-            verts[i].z = points[i][2];
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    RiPolygonV(nvertices, tokens, values, count);
+}
+
+void RiPatchV(RtToken type, RtToken* tokens, RtPointer* values, int count) {
+    if (!g_ctx) return;
+
+    // Supports "bicubic" and "bilinear"
+    // For MVP, implementing "bicubic"
+
+    if (strcmp(type, "bicubic") == 0) {
+        // Find the "P" parameter
+        RtPoint* points = NULL;
+        for (int i = 0; i < count; i++) {
+            if (tokens[i] && strcmp(tokens[i], "P") == 0) {
+                points = (RtPoint*)values[i];
+                break;
+            }
         }
-        
-        RhPrimitive p = rh_prim_create_polygon(nvertices, verts);
+
+        if (!points) return;
+
+        // 16 control points
+        RhVec3 cps[16];
+        for (int i = 0; i < 16; i++) {
+            cps[i].x = points[i][0];
+            cps[i].y = points[i][1];
+            cps[i].z = points[i][2];
+        }
+
+        // Use current basis
+        RhPrimitive p = rh_prim_create_patch_bicubic(cps, curr()->u_basis, curr()->v_basis);
+        ri_parse_primvars(&p, tokens, values, count);
         ri_add_geometry(&p);
         rh_prim_free_data(&p);
-        free(verts);
     }
-    
-    va_end(ap);
 }
 
 void RiPatch(RtToken type, ...) {
     if (!g_ctx) return;
-    
-    // Supports "bicubic" and "bilinear"
-    // For MVP, implementing "bicubic"
-    
-    if (strcmp(type, "bicubic") == 0) {
-        va_list ap;
-        va_start(ap, type);
-        
-        RtToken token = va_arg(ap, RtToken);
-        if (token && strcmp(token, "P") == 0) {
-            RtPoint* points = va_arg(ap, RtPoint*);
-            
-            // 16 control points
-            RhVec3 cps[16];
-            for(int i=0; i<16; i++) {
-                cps[i].x = points[i][0];
-                cps[i].y = points[i][1];
-                cps[i].z = points[i][2];
-            }
-            
-            // Use current basis
-            RhPrimitive p = rh_prim_create_patch_bicubic(cps, curr()->u_basis, curr()->v_basis);
-            ri_add_geometry(&p);
-        }
-        va_end(ap);
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, type);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
     }
+    va_end(ap);
+
+    RiPatchV(type, tokens, values, count);
 }
 
-void RiGeometry(RtToken type, ...) {
+void RiGeometryV(RtToken type, RtToken* tokens, RtPointer* values, int count) {
     if (!g_ctx) return;
-    
+
+    (void)tokens; (void)values; (void)count;  // Currently unused but available for future extensions
+
     if (strcmp(type, "teapot") == 0) {
         // Render 28 Bezier patches
         // Save current basis
@@ -1917,13 +2618,13 @@ void RiGeometry(RtToken type, ...) {
         RhMat4 old_v = curr()->v_basis;
         int old_us = curr()->u_step;
         int old_vs = curr()->v_step;
-        
+
         // Set Bezier Basis
         RhMat4 bezier_m;
         memcpy(bezier_m.m, RiBezierBasis, sizeof(RtMatrix));
         curr()->u_basis = bezier_m;
         curr()->v_basis = bezier_m;
-        
+
         for (int i = 0; i < TEAPOT_NUM_PATCHES; i++) {
             RhVec3 cps[16];
             for (int j = 0; j < 16; j++) {
@@ -1933,18 +2634,35 @@ void RiGeometry(RtToken type, ...) {
             }
             RhPrimitive p = rh_prim_create_patch_bicubic(cps, curr()->u_basis, curr()->v_basis);
             ri_add_geometry(&p);
+            rh_prim_free_data(&p);
         }
-        
+
         // Restore Basis
         curr()->u_basis = old_u;
         curr()->v_basis = old_v;
         curr()->u_step = old_us;
         curr()->v_step = old_vs;
     }
-    
+}
+
+void RiGeometry(RtToken type, ...) {
+    if (!g_ctx) return;
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
     va_list ap;
     va_start(ap, type);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
     va_end(ap);
+
+    RiGeometryV(type, tokens, values, count);
 }
 
 void RiSurfaceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
