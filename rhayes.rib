@@ -1,0 +1,80 @@
+# --- Global Options ---
+Display "output.png" "file" "rgb"
+Format 800 600 1.0
+PixelSamples 4 4
+ShadingRate 4.0
+Projection "perspective"
+
+# --- Camera Setup ---
+# The C code wraps the scene in a TransformBegin to scope the View transform
+TransformBegin
+    # Move the world relative to the camera (Inverse Camera Transform)
+    # The code translates 0, 2, 8 and rotates -15 deg on X
+    Translate 0.0 2.0 8.0
+    Rotate -15.0 1.0 0.0 0.0
+
+    WorldBegin
+
+        # --- Light Sources ---
+        
+        # Key Light (Upper Right)
+        TransformBegin
+            # "pointlight" shader with intensity 1.2 at (8, 10, 8)
+            LightSource "pointlight" 1 "from" [8.0 10.0 8.0] "intensity" [1.2]
+        TransformEnd
+
+        # Fill Light (Left)
+        TransformBegin
+            # "pointlight" shader with intensity 0.5 at (-6, 5, 4)
+            LightSource "pointlight" 2 "from" [-6.0 5.0 4.0] "intensity" [0.5]
+        TransformEnd
+
+        # --- Checkerboard Floor ---
+        # The C code loops 8x8 (64 squares) from -4.0 to 4.0 on X and Z
+        # Below is a truncated example showing the start of the loop pattern.
+        # Logic: if (i+j)%2 == 0 Green, else Red.
+        
+        # Row 0, Col 0 (Green)
+        TransformBegin
+            Color 0.1 0.7 0.1
+            # Polygon "P" [x y z] vertices ordered clockwise
+            Polygon "P" [-4.0 0.0 -4.0  -4.0 0.0 -3.0  -3.0 0.0 -3.0  -3.0 0.0 -4.0]
+        TransformEnd
+
+        # Row 0, Col 1 (Red)
+        TransformBegin
+            Color 0.8 0.1 0.1
+            Polygon "P" [-4.0 0.0 -3.0  -4.0 0.0 -2.0  -3.0 0.0 -2.0  -3.0 0.0 -3.0]
+        TransformEnd
+
+        # ... (In a full RIB, the remaining 62 floor squares would be listed here) ...
+
+        # --- Teapot ---
+        TransformBegin
+            Translate 0.0 0.0 0.0
+            Rotate -90.0 1.0 0.0 0.0 # Stand upright
+            Scale 0.4 0.4 0.4        # Scale down
+            Color 0.9 0.5 0.2        # Copper color
+            Geometry "teapot"
+        TransformEnd
+
+        # --- Shader Demo: Spheres ---
+        
+        # Left Sphere (Textured)
+        TransformBegin
+            Translate -2.5 1.0 -2.0
+            Color 1.0 1.0 1.0
+            # Shader parameters require explicit type declarations in RIB
+            Surface "paintedplastic" "string texturename" ["textures/checker.png"]
+            Sphere 0.8 -0.8 0.8 360.0
+        TransformEnd
+
+        # Right Sphere (Procedural Grid)
+        TransformBegin
+            Translate 2.5 1.0 -2.0
+            Surface "randomgrid"
+            Sphere 0.8 -0.8 0.8 360.0
+        TransformEnd
+
+    WorldEnd
+TransformEnd
