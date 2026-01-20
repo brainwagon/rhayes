@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
     RiDisplay("output.png", "file", "rgb", RI_NULL);
     RiFormat(800, 600, 1.0f);
     RiPixelSamples(4, 4);
-    RiShadingRate(4.0);
+    RiShadingRate(1.0);
     RiProjection("perspective", RI_NULL);
 
     // Setup Camera - looking at teapot from above and front
@@ -94,6 +94,7 @@ int main(int argc, char** argv) {
 
                 // Copper/orange color for teapot
                 RiColor((RtColor){0.9f, 0.5f, 0.2f});
+                RiScale(1.0, 1.0, 4.0/3.0);
                 RiGeometry("teapot", RI_NULL);
             RiTransformEnd();
 
@@ -102,7 +103,7 @@ int main(int argc, char** argv) {
             RiTransformBegin();
                 RiTranslate(-2.5f, 1.0f, -2.0f);
                 RiColor((RtColor){1.0f, 1.0f, 1.0f});  // White base (texture provides color)
-                RiSurface("paintedplastic", "texturename", "textures/checker.png", RI_NULL);
+                RiSurface("paintedplastic", "texturename", "textures/uvgrid.png", RI_NULL);
                 RiSphere(0.8f, -0.8f, 0.8f, 360.0f, RI_NULL);
             RiTransformEnd();
 
