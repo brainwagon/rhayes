@@ -85,6 +85,8 @@ RtToken RiDeclare(const char* name, const char* declaration);
 // 2. Options (Scene Description)
 void RiOption(RtToken name, ...);
 void RiOptionV(RtToken name, RtToken* tokens, RtPointer* values, int count);
+void RiHider(RtToken type, ...);
+void RiHiderV(RtToken type, RtToken* tokens, RtPointer* values, int count);
 void RiFormat(RtInt xresolution, RtInt yresolution, RtFloat pixelaspectratio);
 void RiPixelSamples(RtFloat xsamples, RtFloat ysamples);
 void RiPixelFilter(RtFilterFunc filterfunc, RtFloat xwidth, RtFloat ywidth);

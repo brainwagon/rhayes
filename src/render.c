@@ -65,6 +65,10 @@ static void render_Option(RtToken name, RtToken* tokens, RtPointer* values, int 
     RiOptionV(name, tokens, values, count);
 }
 
+static void render_Hider(RtToken type, RtToken* tokens, RtPointer* values, int count) {
+    RiHiderV(type, tokens, values, count);
+}
+
 static void render_AttributeBegin(void) {
     RiAttributeBegin();
 }
@@ -236,6 +240,7 @@ RiCallbacks ri_render_callbacks = {
     .Shutter = render_Shutter,
     .ShadingRate = render_ShadingRate,
     .Option = render_Option,
+    .Hider = render_Hider,
     .AttributeBegin = render_AttributeBegin,
     .AttributeEnd = render_AttributeEnd,
     .TransformBegin = render_TransformBegin,

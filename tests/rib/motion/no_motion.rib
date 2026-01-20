@@ -1,11 +1,9 @@
-# Motion blur test - sphere moving horizontally
+# Same scene as motion blur test, but no shutter (no motion blur)
 Format 400 300 1
-Display "motion_blur.png" "file" "rgb"
+Display "no_motion.png" "file" "rgb"
 Projection "perspective" "fov" 45
-Hider "hidden" "jitter" [1]
 
-# Enable motion blur (shutter open at 0, close at 1)
-Shutter 0 1.0
+# No Shutter means shutter_open = shutter_close = 0 (no blur)
 PixelSamples 4 4
 
 Translate 0 0 5
@@ -22,18 +20,15 @@ Color [0.3 0.3 0.3]
 Surface "matte"
 Polygon "P" [-5 -1 -5  5 -1 -5  5 -1 5  -5 -1 5]
 
-# Sphere with motion blur (moves from left to right)
+# Sphere in middle position (no motion blur)
 Color [1 0 0]
 Surface "plastic"
 AttributeBegin
-  MotionBegin [0 1]
-    Translate -1.5 0 0
-    Translate 1.5 0 0
-  MotionEnd
+  Translate 0 0 0
   Sphere 0.5 -0.5 0.5 360
 AttributeEnd
 
-# Static reference sphere (no motion)
+# Static reference sphere
 Color [0 0 1]
 AttributeBegin
   Translate 0 1 0

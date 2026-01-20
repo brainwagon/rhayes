@@ -1,0 +1,16 @@
+# Test jitter disabled (explicit)
+Format 200 200 1
+Display "jitter_off.png" "file" "rgba"
+Projection "perspective" "fov" 45
+Hider "hidden" "jitter" [0]
+
+TransformBegin
+    Translate 0 0 3
+    WorldBegin
+        LightSource "distantlight" "intensity" 1 "from" [0 1 1]
+        Color [0.8 0.2 0.2]
+        Surface "plastic"
+        Rotate -90 1 0 0
+        Sphere 1 -1 1 360
+    WorldEnd
+TransformEnd

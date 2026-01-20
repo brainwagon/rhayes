@@ -244,6 +244,11 @@ typedef struct {
         char jsonfilename[256];     // JSON output file (empty = none)
     } stats_options;
 
+    // Hider options (set via RiHider)
+    struct {
+        int jitter;                 // 1 = enabled (default), 0 = disabled
+    } hider_options;
+
     // Variable declarations (RiDeclare)
     RiDeclaration declarations[MAX_DECLARATIONS];
     int num_declarations;
@@ -469,19 +474,33 @@ static inline float ri_edge_function(RhVec3 v0, RhVec3 v1, float px, float py) {
     return (px - v0.x) * (v1.y - v0.y) - (py - v0.y) * (v1.x - v0.x);
 }
 
+// Spatial jitter function - returns x,y offsets in [-0.5, +0.5] range
+// Uses different primes than temporal sampling for decorrelation
+static inline void ri_spatial_jitter(int x, int y, float* jitter_x, float* jitter_y) {
+    unsigned int hash = (unsigned int)(x * 127717) ^ (unsigned int)(y * 94531);
+    *jitter_x = ((float)(hash & 0xFFFF) / 65536.0f) - 0.5f;
+    *jitter_y = ((float)((hash >> 16) & 0xFFFF) / 65536.0f) - 0.5f;
+}
+
 // Simple hash function for stratified temporal sampling
 // Returns a value in [0,1] based on pixel coordinates
-static inline float ri_temporal_hash(int x, int y, int ss_x, int ss_y) {
+// jitter_enabled: if true, adds random jitter within stratum; if false, uses center of stratum
+static inline float ri_temporal_hash(int x, int y, int ss_x, int ss_y, int jitter_enabled) {
     // Use subpixel position within the pixel sample grid for stratification
     int sub_x = x % ss_x;
     int sub_y = y % ss_y;
     int sample_idx = sub_y * ss_x + sub_x;
     int total_samples = ss_x * ss_y;
 
-    // Stratified time: jitter within each stratum
-    // Use a simple LCG-style hash for jitter
-    unsigned int hash = (unsigned int)(x * 73856093) ^ (unsigned int)(y * 19349663);
-    float jitter = (float)(hash & 0xFFFF) / 65536.0f;
+    // Stratified time: jitter within each stratum or use center
+    float jitter;
+    if (jitter_enabled) {
+        // Use a simple LCG-style hash for jitter
+        unsigned int hash = (unsigned int)(x * 73856093) ^ (unsigned int)(y * 19349663);
+        jitter = (float)(hash & 0xFFFF) / 65536.0f;
+    } else {
+        jitter = 0.5f;  // Center of stratum
+    }
 
     return ((float)sample_idx + jitter) / (float)total_samples;
 }
@@ -537,13 +556,21 @@ static void ri_sample_mpoly(
             float px = x + 0.5f;
             float py = y + 0.5f;
 
+            // Apply spatial jitter if enabled
+            if (g_ctx->hider_options.jitter) {
+                float jx, jy;
+                ri_spatial_jitter(x, y, &jx, &jy);
+                px += jx;
+                py += jy;
+            }
+
             // Get vertices, interpolating for motion blur
             RhVec3 v0, v1, v2, v3;
             float area1, area2;
 
             if (has_motion) {
                 // Compute stratified time for this pixel (in [0,1])
-                float pixel_t = ri_temporal_hash(x, y, g_ctx->pixel_samples_x, g_ctx->pixel_samples_y);
+                float pixel_t = ri_temporal_hash(x, y, g_ctx->pixel_samples_x, g_ctx->pixel_samples_y, g_ctx->hider_options.jitter);
 
                 // Map pixel sample time to world time via shutter interval
                 float world_time = g_ctx->shutter_open + pixel_t * (g_ctx->shutter_close - g_ctx->shutter_open);
@@ -904,6 +931,9 @@ void RiBegin(RtToken name) {
     g_ctx->num_declarations = 0;
     ri_install_standard_declarations();
 
+    // Default hider options (jitter enabled)
+    g_ctx->hider_options.jitter = 1;
+
     (void)name;
 }
 
@@ -1175,6 +1205,41 @@ void RiOption(RtToken name, ...) {
     va_end(ap);
 
     RiOptionV(name, tokens, values, count);
+}
+
+void RiHiderV(RtToken type, RtToken* tokens, RtPointer* values, int count) {
+    if (!g_ctx) return;
+
+    // Type is typically "hidden" for z-buffer rendering, but we accept any
+    (void)type;
+
+    // Parse "jitter" parameter
+    for (int i = 0; i < count; i++) {
+        if (tokens[i] && strcmp(tokens[i], "jitter") == 0) {
+            float* val = (float*)values[i];
+            g_ctx->hider_options.jitter = (*val != 0.0f) ? 1 : 0;
+        }
+    }
+}
+
+void RiHider(RtToken type, ...) {
+    if (!g_ctx) return;
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, type);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    RiHiderV(type, tokens, values, count);
 }
 
 void RiFormat(RtInt xresolution, RtInt yresolution, RtFloat pixelaspectratio) {

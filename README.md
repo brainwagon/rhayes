@@ -23,8 +23,8 @@ published precisely so people could write compliant tools and implementation.   
 that document.  I have no access to any proprietary code from Pixar Animation Studios, and this code uses no such code.
 - The algorithms used are documented in [the 1987 Siggraph paper by Cook, Carpenter and Catmull](https://graphics.pixar.com/library/Reyes/), and form the basis of the AI implementation (and largely my own, and probably everyone's) 
 understanding of the Reyes algorithm.
-- There was a patent granted to Pixar for the use of jittered sampling ([U.S. Patent 4,897,806 ("Pseudo-random point sampling techniques in computer graphics")](https://patents.google.com/patent/US4897806A/en)).  This patent expired in 
-2007, and so a future version of this code is likely to implement such techniques to improve anti-aliasing.
+- There was a patent granted to Pixar for the use of jittered sampling ([U.S. Patent 4,897,806 ("Pseudo-random point sampling techniques in computer graphics")](https://patents.google.com/patent/US4897806A/en)).  This patent expired in
+2007, and this renderer now implements jittered sampling for improved anti-aliasing (enabled by default, controllable via `RiHider`).
 - While I am striving for compatibility with this (rather antique and old) version of the specification 
 (judging whether an AI can succeed in implementing to a rather complex specification is really the point of this 
 project) no guarantees, warranties or the like as to its compatibility or use for any particular purpose is implied
@@ -97,6 +97,11 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
     - Transform motion blur via `MotionBegin`/`MotionEnd` blocks.
     - Correct shutter-to-motion time remapping for partial motion ranges.
     - Stratified temporal sampling to reduce noise.
+- **Jittered Sampling**:
+    - Spatial jitter for improved anti-aliasing at edges.
+    - Temporal jitter for smoother motion blur.
+    - Configurable via `RiHider` API (`Hider "hidden" "jitter" [0/1]`).
+    - Enabled by default; deterministic per-pixel hash for reproducible renders.
 - **Primitive Variables (Primvars)**:
     - User-defined variables attached to primitives (`RiDeclare`).
     - Support for all storage classes: constant, uniform, varying, vertex.

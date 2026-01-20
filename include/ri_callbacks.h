@@ -24,6 +24,7 @@ typedef struct RiCallbacks {
     void (*Shutter)(RtFloat open, RtFloat close);
     void (*ShadingRate)(RtFloat size);
     void (*Option)(RtToken name, RtToken *tokens, RtPointer *values, int count);
+    void (*Hider)(RtToken type, RtToken *tokens, RtPointer *values, int count);
 
     // Graphics State
     void (*AttributeBegin)(void);
