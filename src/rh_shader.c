@@ -83,8 +83,10 @@ static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor
             L = rh_vec3_normalize(rh_vec3_sub(l->position, ctx->P));
 
             // Spotlight cone attenuation
-            // Angle between light direction and vector to surface
-            float cos_angle = -rh_vec3_dot(l->direction, L);
+            // l->direction points from target toward light; L points from surface toward light
+            // Beam direction (light toward target) = -l->direction; light toward surface = -L
+            // cos_angle = dot(-l->direction, -L) = dot(l->direction, L)
+            float cos_angle = rh_vec3_dot(l->direction, L);
             float angle = acosf(rh_max(-1.0f, rh_min(1.0f, cos_angle))) * (180.0f / RH_PI);
 
             float inner_angle = l->coneangle;

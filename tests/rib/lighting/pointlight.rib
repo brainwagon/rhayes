@@ -1,13 +1,14 @@
 ##RenderMan RIB-Structure 1.1
 version 3.03
 Format 200 200 1
-Display "distantlight.png" "file" "rgba"
+Display "pointlight.png" "file" "rgba"
 Projection "perspective" "fov" 45
 TransformBegin
     Rotate -20 1 0 0
     Translate 0 0 4
     WorldBegin
-        LightSource "distantlight" "intensity" 1 "from" [1 1 -1]
+        # Point light positioned above center to show radial falloff
+        LightSource "pointlight" "intensity" 1.2 "from" [0 1.5 0]
         Surface "plastic"
         # Ground plane
         AttributeBegin
@@ -15,7 +16,7 @@ TransformBegin
             Surface "matte"
             Polygon "P" [-2 -0.5 -1.5  2 -0.5 -1.5  2 -0.5 1.5  -2 -0.5 1.5]
         AttributeEnd
-        # Multiple spheres to show lighting direction
+        # Multiple spheres to show point light falloff
         AttributeBegin
             Color [0.8 0.8 0.8]
             Translate -1 0 0
