@@ -6,11 +6,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Global verbose flag (set via -v command line option)
+static int g_verbose = 0;
+
 // Wrapper functions that call the actual Ri* functions
 // These adapt the callback interface to the varargs Ri* API
 
 static void render_Begin(RtToken name) {
     RiBegin(name);
+    if (g_verbose) {
+        RtInt level = 1;
+        RiOption("statistics", "endofframe", &level, RI_NULL);
+    }
 }
 
 static void render_End(void) {
@@ -277,13 +284,22 @@ RiCallbacks ri_render_callbacks = {
 };
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: render <file.rib>\n");
+    const char* filename = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+            g_verbose = 1;
+        } else if (argv[i][0] != '-') {
+            filename = argv[i];
+        }
+    }
+
+    if (!filename) {
+        fprintf(stderr, "Usage: render [-v] <file.rib>\n");
+        fprintf(stderr, "  -v, --verbose  Enable statistics output (level 1)\n");
         fprintf(stderr, "Parses a RIB file and renders it.\n");
         return 1;
     }
-
-    const char* filename = argv[1];
 
     RibParser* parser = rib_parser_create(&ri_render_callbacks);
     if (!parser) {

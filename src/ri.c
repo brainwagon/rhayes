@@ -97,6 +97,8 @@ typedef struct {
     void* shader_params;
     float shading_rate;  // Captured from attribute state
     bool processed;      // Has this primitive been split/diced/shaded?
+    int last_bucket_idx; // Linear index of last bucket containing this item
+    int all_items_idx;   // Index in g_ctx->all_items for cleanup
 } RhRenderItem;
 
 // --- Micropolygon Types for Efficient Bucket Rendering ---
@@ -259,7 +261,14 @@ typedef struct {
         int grids_by_size[17];      // Index 0 unused, 1-16 for grid sizes
         int total_grids;
         int total_micropolygons;
+        int mpolys_freed;           // Track freed mpolys
         int primitives_processed;   // Unique primitives (not per-bucket)
+        // Per-bucket tracking for peak/average
+        int buckets_processed;      // Count of buckets
+        int grids_this_bucket;      // Grids in current bucket
+        int peak_grids_per_bucket;  // Max grids in any bucket
+        int mpolys_this_bucket;     // Mpolys in current bucket
+        int peak_mpolys_per_bucket; // Max mpolys in any bucket
     } stats;
 
     // Performance timing statistics
@@ -350,12 +359,14 @@ static RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* t
     item->shader_params = curr()->current_shader_params;
     item->shading_rate = curr()->shading_rate;
     item->processed = false;
+    item->last_bucket_idx = -1;
 
     // Add to global list for cleanup
     if (g_ctx->all_items_count >= g_ctx->all_items_capacity) {
         g_ctx->all_items_capacity = g_ctx->all_items_capacity == 0 ? 16 : g_ctx->all_items_capacity * 2;
         g_ctx->all_items = (RhRenderItem**)realloc(g_ctx->all_items, g_ctx->all_items_capacity * sizeof(RhRenderItem*));
     }
+    item->all_items_idx = g_ctx->all_items_count;
     g_ctx->all_items[g_ctx->all_items_count++] = item;
 
     return item;
@@ -390,6 +401,7 @@ static void ri_mpoly_list_clear(RhMicropolygonList* list) {
 }
 
 static void ri_mpoly_list_free(RhMicropolygonList* list) {
+    g_ctx->stats.mpolys_freed += list->count;
     free(list->data);
     list->data = NULL;
     list->count = 0;
@@ -416,6 +428,7 @@ static void ri_grid_to_mpolys_motion(const RhMicroGrid* grid,
     // Track micropolygon statistics
     int mpoly_count = (w - 1) * (h - 1);
     g_ctx->stats.total_micropolygons += mpoly_count;
+    g_ctx->stats.mpolys_this_bucket += mpoly_count;
 
     for (int j = 0; j < h - 1; j++) {
         for (int i = 0; i < w - 1; i++) {
@@ -1017,6 +1030,16 @@ static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, con
     if (b_min_y < 0) b_min_y = 0;
     if (b_max_y >= g_ctx->num_buckets_y) b_max_y = g_ctx->num_buckets_y - 1;
 
+    // Early-out for completely off-screen items
+    if (b_min_x > b_max_x || b_min_y > b_max_y) {
+        g_ctx->all_items[item->all_items_idx] = NULL;  // Mark as freed
+        ri_render_item_destroy(item);
+        return;
+    }
+
+    // Compute last bucket index (scanline order: y * num_buckets_x + x)
+    item->last_bucket_idx = b_max_y * g_ctx->num_buckets_x + b_max_x;
+
     for (int y = b_min_y; y <= b_max_y; y++) {
         for (int x = b_min_x; x <= b_max_x; x++) {
             RhBucket* b = &g_ctx->buckets[y * g_ctx->num_buckets_x + x];
@@ -1143,7 +1166,10 @@ void RiEnd(void) {
     if (g_ctx) {
         if (g_ctx->raster) rh_raster_destroy(g_ctx->raster);
         if (g_ctx->all_items) {
-            for(int i=0; i<g_ctx->all_items_count; i++) ri_render_item_destroy(g_ctx->all_items[i]);
+            // Items may have been freed during bucket processing; skip NULLs
+            for(int i=0; i<g_ctx->all_items_count; i++) {
+                if (g_ctx->all_items[i]) ri_render_item_destroy(g_ctx->all_items[i]);
+            }
             free(g_ctx->all_items);
         }
         if (g_ctx->objects) {
@@ -1878,15 +1904,20 @@ void RiWorldEnd(void) {
     // Use reusable micropolygon list from context (avoids malloc/free per primitive)
     RhMicropolygonList* mpolys = &g_ctx->bucket_mpolys;
 
-    for (int y = 0; y < g_ctx->num_buckets_y; y++) {
-        for (int x = 0; x < g_ctx->num_buckets_x; x++) {
-            RhBucket* b = &g_ctx->buckets[y * g_ctx->num_buckets_x + x];
+    for (int by = 0; by < g_ctx->num_buckets_y; by++) {
+        for (int bx = 0; bx < g_ctx->num_buckets_x; bx++) {
+            int current_bucket_idx = by * g_ctx->num_buckets_x + bx;
+            RhBucket* b = &g_ctx->buckets[current_bucket_idx];
+
+            // Reset per-bucket counters
+            g_ctx->stats.grids_this_bucket = 0;
+            g_ctx->stats.mpolys_this_bucket = 0;
 
             // Compute clip bounds for this bucket
-            int clip_min_x = x * g_ctx->bucket_size;
-            int clip_max_x = rh_min((x + 1) * g_ctx->bucket_size - 1, ss_xres - 1);
-            int clip_min_y = y * g_ctx->bucket_size;
-            int clip_max_y = rh_min((y + 1) * g_ctx->bucket_size - 1, ss_yres - 1);
+            int clip_min_x = bx * g_ctx->bucket_size;
+            int clip_max_x = rh_min((bx + 1) * g_ctx->bucket_size - 1, ss_xres - 1);
+            int clip_min_y = by * g_ctx->bucket_size;
+            int clip_max_y = rh_min((by + 1) * g_ctx->bucket_size - 1, ss_yres - 1);
 
             // Phase 1: Sample queued micropolygons from earlier buckets
             for (int qi = 0; qi < b->queued.count; qi++) {
@@ -1898,52 +1929,69 @@ void RiWorldEnd(void) {
             // Phase 2: Process unprocessed primitives
             for (int i = 0; i < b->item_count; i++) {
                 RhRenderItem* item = b->items[i];
-                if (item->processed) continue;  // Already processed by earlier bucket
-                item->processed = true;
-                g_ctx->stats.primitives_processed++;
 
-                // Generate all micropolygons for this primitive (reuse list, just clear)
-                ri_mpoly_list_clear(mpolys);  // Clears count but keeps capacity
-                ri_process_item_recursive(item, 0, mpolys, mode);
+                if (!item->processed) {
+                    item->processed = true;
+                    g_ctx->stats.primitives_processed++;
 
-                // Distribute micropolygons to buckets
-                for (int mi = 0; mi < mpolys->count; mi++) {
-                    RhMicropolygon* mpoly = &mpolys->data[mi];
+                    // Generate all micropolygons for this primitive (reuse list, just clear)
+                    ri_mpoly_list_clear(mpolys);  // Clears count but keeps capacity
+                    ri_process_item_recursive(item, 0, mpolys, mode);
 
-                    // Track motion blur statistics
-                    if (mpoly->has_motion) {
-                        g_ctx->timing.motion_mpolys++;
-                    } else {
-                        g_ctx->timing.static_mpolys++;
-                    }
+                    // Distribute micropolygons to buckets
+                    for (int mi = 0; mi < mpolys->count; mi++) {
+                        RhMicropolygon* mpoly = &mpolys->data[mi];
 
-                    // Compute which buckets this micropolygon overlaps
-                    int bx_min = mpoly->min_x / g_ctx->bucket_size;
-                    int bx_max = mpoly->max_x / g_ctx->bucket_size;
-                    int by_min = mpoly->min_y / g_ctx->bucket_size;
-                    int by_max = mpoly->max_y / g_ctx->bucket_size;
+                        // Track motion blur statistics
+                        if (mpoly->has_motion) {
+                            g_ctx->timing.motion_mpolys++;
+                        } else {
+                            g_ctx->timing.static_mpolys++;
+                        }
 
-                    // Clamp to valid bucket range
-                    bx_min = ri_clamp_int(bx_min, 0, g_ctx->num_buckets_x - 1);
-                    bx_max = ri_clamp_int(bx_max, 0, g_ctx->num_buckets_x - 1);
-                    by_min = ri_clamp_int(by_min, 0, g_ctx->num_buckets_y - 1);
-                    by_max = ri_clamp_int(by_max, 0, g_ctx->num_buckets_y - 1);
+                        // Compute which buckets this micropolygon overlaps
+                        int mbx_min = mpoly->min_x / g_ctx->bucket_size;
+                        int mbx_max = mpoly->max_x / g_ctx->bucket_size;
+                        int mby_min = mpoly->min_y / g_ctx->bucket_size;
+                        int mby_max = mpoly->max_y / g_ctx->bucket_size;
 
-                    for (int by = by_min; by <= by_max; by++) {
-                        for (int bx = bx_min; bx <= bx_max; bx++) {
-                            if (by == y && bx == x) {
-                                // Current bucket: sample immediately
-                                ri_sample_mpoly(g_ctx->raster, mpoly,
-                                               clip_min_x, clip_min_y, clip_max_x, clip_max_y, mode);
-                            } else if (by > y || (by == y && bx > x)) {
-                                // Later bucket: queue for later
-                                RhBucket* later = &g_ctx->buckets[by * g_ctx->num_buckets_x + bx];
-                                ri_mpoly_list_push(&later->queued, mpoly);
+                        // Clamp to valid bucket range
+                        mbx_min = ri_clamp_int(mbx_min, 0, g_ctx->num_buckets_x - 1);
+                        mbx_max = ri_clamp_int(mbx_max, 0, g_ctx->num_buckets_x - 1);
+                        mby_min = ri_clamp_int(mby_min, 0, g_ctx->num_buckets_y - 1);
+                        mby_max = ri_clamp_int(mby_max, 0, g_ctx->num_buckets_y - 1);
+
+                        for (int mby = mby_min; mby <= mby_max; mby++) {
+                            for (int mbx = mbx_min; mbx <= mbx_max; mbx++) {
+                                if (mby == by && mbx == bx) {
+                                    // Current bucket: sample immediately
+                                    ri_sample_mpoly(g_ctx->raster, mpoly,
+                                                   clip_min_x, clip_min_y, clip_max_x, clip_max_y, mode);
+                                } else if (mby > by || (mby == by && mbx > bx)) {
+                                    // Later bucket: queue for later
+                                    RhBucket* later = &g_ctx->buckets[mby * g_ctx->num_buckets_x + mbx];
+                                    ri_mpoly_list_push(&later->queued, mpoly);
+                                }
+                                // Earlier bucket: already rendered, skip
                             }
-                            // Earlier bucket: already rendered, skip
                         }
                     }
                 }
+
+                // Free item when we're the last bucket containing it
+                if (current_bucket_idx == item->last_bucket_idx) {
+                    g_ctx->all_items[item->all_items_idx] = NULL;
+                    ri_render_item_destroy(item);
+                }
+            }
+
+            // Update per-bucket peak statistics
+            g_ctx->stats.buckets_processed++;
+            if (g_ctx->stats.grids_this_bucket > g_ctx->stats.peak_grids_per_bucket) {
+                g_ctx->stats.peak_grids_per_bucket = g_ctx->stats.grids_this_bucket;
+            }
+            if (g_ctx->stats.mpolys_this_bucket > g_ctx->stats.peak_mpolys_per_bucket) {
+                g_ctx->stats.peak_mpolys_per_bucket = g_ctx->stats.mpolys_this_bucket;
             }
 
             // Cleanup bucket item list
@@ -2035,7 +2083,8 @@ void RiWorldEnd(void) {
     }
 
     // Output rendering statistics if enabled via Option "statistics" "endofframe"
-    if (g_ctx->stats_options.endofframe) {
+    // Level 0: no output, Level 1: basic summary, Level 2: detailed stats
+    if (g_ctx->stats_options.endofframe >= 1) {
         const char* prim_names[] = {
             "Sphere", "Cylinder", "Cone", "Paraboloid", "Polygon",
             "Patch (bicubic)", "Disk", "Torus", "Hyperboloid"
@@ -2052,33 +2101,55 @@ void RiWorldEnd(void) {
             if (!text_out) text_out = stderr;
         }
 
+        // Level 1: Basic summary
         fprintf(text_out, "\n=== Rendering Statistics ===\n");
-        fprintf(text_out, "Primitives by type:\n");
+        fprintf(text_out, "Primitives: %d total\n", total_prims);
         for (int i = 0; i < 9; i++) {
             if (g_ctx->stats.primitives_by_type[i] > 0) {
                 fprintf(text_out, "  %-16s: %d\n", prim_names[i], g_ctx->stats.primitives_by_type[i]);
             }
         }
-        fprintf(text_out, "  %-16s: %d\n", "Total", total_prims);
-        fprintf(text_out, "Primitives processed (unique): %d\n", g_ctx->stats.primitives_processed);
-        fprintf(text_out, "\nGrids by size:\n");
-        for (int i = 1; i <= 16; i++) {
-            if (g_ctx->stats.grids_by_size[i] > 0) {
-                fprintf(text_out, "  %2dx%-2d: %d\n", i, i, g_ctx->stats.grids_by_size[i]);
+
+        // Grid stats with peak/average per bucket
+        int num_buckets = g_ctx->stats.buckets_processed;
+        float avg_grids = num_buckets > 0 ?
+            (float)g_ctx->stats.total_grids / num_buckets : 0;
+        fprintf(text_out, "\nGrids:\n");
+        fprintf(text_out, "  Allocated:   %d\n", g_ctx->stats.total_grids);
+        fprintf(text_out, "  Peak/bucket: %d\n", g_ctx->stats.peak_grids_per_bucket);
+        fprintf(text_out, "  Avg/bucket:  %.1f\n", avg_grids);
+
+        // Micropolygon stats with peak/average per bucket
+        float avg_mpolys = num_buckets > 0 ?
+            (float)g_ctx->stats.total_micropolygons / num_buckets : 0;
+        fprintf(text_out, "\nMicropolygons:\n");
+        fprintf(text_out, "  Allocated:   %d\n", g_ctx->stats.total_micropolygons);
+        fprintf(text_out, "  Freed:       %d\n", g_ctx->stats.mpolys_freed);
+        fprintf(text_out, "  Peak/bucket: %d\n", g_ctx->stats.peak_mpolys_per_bucket);
+        fprintf(text_out, "  Avg/bucket:  %.1f\n", avg_mpolys);
+
+        // Level 2: Detailed statistics
+        if (g_ctx->stats_options.endofframe >= 2) {
+            fprintf(text_out, "\nGrids by size:\n");
+            for (int i = 1; i <= 16; i++) {
+                if (g_ctx->stats.grids_by_size[i] > 0) {
+                    fprintf(text_out, "  %2dx%-2d: %d\n", i, i, g_ctx->stats.grids_by_size[i]);
+                }
             }
+
+            fprintf(text_out, "\nMotion blur:\n");
+            fprintf(text_out, "  Motion mpolys: %d\n", g_ctx->timing.motion_mpolys);
+            fprintf(text_out, "  Static mpolys: %d\n", g_ctx->timing.static_mpolys);
+
+            fprintf(text_out, "\nPerformance timing:\n");
+            fprintf(text_out, "  Bucket processing: %.3f s\n", g_ctx->timing.bucket_time);
         }
-        fprintf(text_out, "Total grids: %d\n", g_ctx->stats.total_grids);
-        fprintf(text_out, "Total micropolygons: %d\n", g_ctx->stats.total_micropolygons);
-        fprintf(text_out, "\nMotion blur statistics:\n");
-        fprintf(text_out, "  Motion mpolys: %d\n", g_ctx->timing.motion_mpolys);
-        fprintf(text_out, "  Static mpolys: %d\n", g_ctx->timing.static_mpolys);
-        fprintf(text_out, "\nPerformance timing:\n");
-        fprintf(text_out, "  Bucket processing: %.3f s\n", g_ctx->timing.bucket_time);
+
         fprintf(text_out, "============================\n\n");
 
         if (text_out != stderr) fclose(text_out);
 
-        // JSON output if jsonfilename specified
+        // JSON output if jsonfilename specified (always includes full details)
         if (g_ctx->stats_options.jsonfilename[0] != '\0') {
             FILE* json_out = fopen(g_ctx->stats_options.jsonfilename, "w");
             if (json_out) {
@@ -2106,7 +2177,11 @@ void RiWorldEnd(void) {
                 }
                 fprintf(json_out, "\n  },\n");
                 fprintf(json_out, "  \"grids_total\": %d,\n", g_ctx->stats.total_grids);
+                fprintf(json_out, "  \"grids_peak_per_bucket\": %d,\n", g_ctx->stats.peak_grids_per_bucket);
                 fprintf(json_out, "  \"micropolygons_total\": %d,\n", g_ctx->stats.total_micropolygons);
+                fprintf(json_out, "  \"micropolygons_freed\": %d,\n", g_ctx->stats.mpolys_freed);
+                fprintf(json_out, "  \"micropolygons_peak_per_bucket\": %d,\n", g_ctx->stats.peak_mpolys_per_bucket);
+                fprintf(json_out, "  \"buckets_processed\": %d,\n", g_ctx->stats.buckets_processed);
                 fprintf(json_out, "  \"motion_mpolys\": %d,\n", g_ctx->timing.motion_mpolys);
                 fprintf(json_out, "  \"static_mpolys\": %d,\n", g_ctx->timing.static_mpolys);
                 fprintf(json_out, "  \"bucket_time_sec\": %.6f\n", g_ctx->timing.bucket_time);
@@ -2179,7 +2254,7 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
         }
     }
 
-    // Calculate direction for distant/spotlight
+    // Calculate direction (toward light for distantlight, used differently for spotlight)
     l->direction = rh_vec3_normalize(rh_vec3_sub(l->position, to));
 
     // Transform to world space
@@ -2299,6 +2374,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
 
         // Track grid statistics
         g_ctx->stats.total_grids++;
+        g_ctx->stats.grids_this_bucket++;
         if (gridSize >= 1 && gridSize <= 16) {
             g_ctx->stats.grids_by_size[gridSize]++;
         }
