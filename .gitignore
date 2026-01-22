@@ -10,6 +10,12 @@ output.ppm
 .DS_Store
 rhayes
 
+# Profiling output
+gmon.out
+*.gcda
+*.gcno
+*.gcov
+
 # Test output (but not reference images)
 tests/output/
 !tests/reference/**/*.ppm
