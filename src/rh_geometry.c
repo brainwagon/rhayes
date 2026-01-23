@@ -253,6 +253,16 @@ RhPrimitive rh_prim_create_patch_bicubic(const RhVec3* cp, RhMat4 u_basis, RhMat
     return p;
 }
 
+RhPrimitive rh_prim_create_patch_bilinear(const RhVec3* cp) {
+    RhPrimitive p;
+    p.type = RH_PRIM_PATCH_BILINEAR;
+    if (cp) memcpy(p.data.bilinear.cp, cp, 4 * sizeof(RhVec3));
+    p.u_min = 0.0f; p.u_max = 1.0f;
+    p.v_min = 0.0f; p.v_max = 1.0f;
+    p.primvars = NULL; p.num_primvars = 0;
+    return p;
+}
+
 void rh_prim_free_data(RhPrimitive* p) {
     if (p->type == RH_PRIM_POLYGON) {
         if (p->data.polygon.vertices) {
@@ -301,6 +311,15 @@ RhBounds3 rh_prim_bound(const RhPrimitive* p) {
         b.max = p->data.patch.cp[0];
         for (int i = 1; i < 16; i++) {
              RhVec3 v = p->data.patch.cp[i];
+             b.min.x = rh_min(b.min.x, v.x); b.min.y = rh_min(b.min.y, v.y); b.min.z = rh_min(b.min.z, v.z);
+             b.max.x = rh_max(b.max.x, v.x); b.max.y = rh_max(b.max.y, v.y); b.max.z = rh_max(b.max.z, v.z);
+        }
+    } else if (p->type == RH_PRIM_PATCH_BILINEAR) {
+        // Bilinear patch: bound the 4 control points
+        b.min = p->data.bilinear.cp[0];
+        b.max = p->data.bilinear.cp[0];
+        for (int i = 1; i < 4; i++) {
+             RhVec3 v = p->data.bilinear.cp[i];
              b.min.x = rh_min(b.min.x, v.x); b.min.y = rh_min(b.min.y, v.y); b.min.z = rh_min(b.min.z, v.z);
              b.max.x = rh_max(b.max.x, v.x); b.max.y = rh_max(b.max.y, v.y); b.max.z = rh_max(b.max.z, v.z);
         }
@@ -532,6 +551,30 @@ static RhVec3 evaluate_patch_bicubic(const RhPrimitive* p, RhFloat u, RhFloat v)
         }
     }
     
+    return pos;
+}
+
+static RhVec3 evaluate_patch_bilinear(const RhPrimitive* p, RhFloat u, RhFloat v) {
+    // Bilinear interpolation:
+    // P(u,v) = (1-u)(1-v)*cp[0] + u(1-v)*cp[1] + uv*cp[2] + (1-u)v*cp[3]
+    // Control point order (RenderMan convention, u varies faster):
+    // cp[0]: (u=0, v=0) - bottom-left
+    // cp[1]: (u=1, v=0) - bottom-right
+    // cp[2]: (u=1, v=1) - top-right
+    // cp[3]: (u=0, v=1) - top-left
+
+    const RhVec3* cp = p->data.bilinear.cp;
+
+    RhFloat w0 = (1.0f - u) * (1.0f - v);  // cp[0] weight
+    RhFloat w1 = u * (1.0f - v);            // cp[1] weight
+    RhFloat w2 = u * v;                     // cp[2] weight
+    RhFloat w3 = (1.0f - u) * v;            // cp[3] weight
+
+    RhVec3 pos;
+    pos.x = w0 * cp[0].x + w1 * cp[1].x + w2 * cp[2].x + w3 * cp[3].x;
+    pos.y = w0 * cp[0].y + w1 * cp[1].y + w2 * cp[2].y + w3 * cp[3].y;
+    pos.z = w0 * cp[0].z + w1 * cp[1].z + w2 * cp[2].z + w3 * cp[3].z;
+
     return pos;
 }
 
@@ -768,6 +811,7 @@ RhVec3 rh_prim_eval_point(const RhPrimitive* p, RhFloat u, RhFloat v) {
         case RH_PRIM_PARABOLOID: return evaluate_paraboloid(p, u, v);
         case RH_PRIM_POLYGON: return evaluate_polygon(p, u, v);
         case RH_PRIM_PATCH_BICUBIC: return evaluate_patch_bicubic(p, u, v);
+        case RH_PRIM_PATCH_BILINEAR: return evaluate_patch_bilinear(p, u, v);
         case RH_PRIM_DISK: return evaluate_disk(p, u, v);
         case RH_PRIM_TORUS: return evaluate_torus(p, u, v);
         case RH_PRIM_HYPERBOLOID: return evaluate_hyperboloid(p, u, v);
@@ -796,6 +840,7 @@ void rh_prim_dice(const RhPrimitive* p, int u_res, int v_res, RhMicroGrid* grid)
                 case RH_PRIM_PARABOLOID: pos = evaluate_paraboloid(p, u, v); break;
                 case RH_PRIM_POLYGON: pos = evaluate_polygon(p, u, v); break;
                 case RH_PRIM_PATCH_BICUBIC: pos = evaluate_patch_bicubic(p, u, v); break;
+                case RH_PRIM_PATCH_BILINEAR: pos = evaluate_patch_bilinear(p, u, v); break;
                 case RH_PRIM_DISK: pos = evaluate_disk(p, u, v); break;
                 case RH_PRIM_TORUS: pos = evaluate_torus(p, u, v); break;
                 case RH_PRIM_HYPERBOLOID: pos = evaluate_hyperboloid(p, u, v); break;
@@ -845,6 +890,10 @@ void rh_prim_dice(const RhPrimitive* p, int u_res, int v_res, RhMicroGrid* grid)
                     p_plus_u = evaluate_patch_bicubic(p, u + eps, v);
                     p_plus_v = evaluate_patch_bicubic(p, u, v + eps);
                     break;
+                case RH_PRIM_PATCH_BILINEAR:
+                    p_plus_u = evaluate_patch_bilinear(p, u + eps, v);
+                    p_plus_v = evaluate_patch_bilinear(p, u, v + eps);
+                    break;
                 case RH_PRIM_DISK:
                     p_plus_u = evaluate_disk(p, u + eps, v);
                     p_plus_v = evaluate_disk(p, u, v + eps);
@@ -864,42 +913,47 @@ void rh_prim_dice(const RhPrimitive* p, int u_res, int v_res, RhMicroGrid* grid)
 
             RhVec3 norm = rh_vec3_cross(dPdu, dPdv); // Standard: dPdu x dPdv
 
-            // Check if cross product is degenerate (e.g., at poles of sphere, center of disk)
-            RhFloat norm_len_sq = norm.x*norm.x + norm.y*norm.y + norm.z*norm.z;
-            if (norm_len_sq < 1e-8f) {
-                // Fallback: use analytic normals for known primitives
-                if (p->type == RH_PRIM_SPHERE) {
-                    // For sphere centered at origin: N = normalize(P)
-                    norm = rh_vec3_normalize(pos);
-                } else if (p->type == RH_PRIM_CYLINDER) {
-                    // For cylinder along z-axis: N = normalize(x, y, 0)
-                    norm = rh_vec3_normalize(rh_vec3_create(pos.x, pos.y, 0.0f));
-                } else if (p->type == RH_PRIM_CONE) {
-                    // For cone along z-axis, normal depends on cone angle
-                    norm = rh_vec3_normalize(rh_vec3_create(pos.x, pos.y, 0.0f));
-                } else if (p->type == RH_PRIM_DISK) {
-                    // Disk normal is always +Z (or -Z for negative thetamax)
-                    norm = rh_vec3_create(0.0f, 0.0f, 1.0f);
-                } else if (p->type == RH_PRIM_TORUS) {
-                    // Torus normal points outward from tube center
-                    RhFloat R = p->data.torus.majorradius;
-                    RhFloat theta_rad = u * p->data.torus.theta_max * (RH_PI / 180.0f);
-                    RhVec3 ring_center = rh_vec3_create(R * cosf(theta_rad), R * sinf(theta_rad), 0.0f);
-                    norm = rh_vec3_normalize(rh_vec3_sub(pos, ring_center));
-                } else {
-                    // Last resort: use any non-zero derivative as normal direction
-                    RhFloat dPdu_len_sq = dPdu.x*dPdu.x + dPdu.y*dPdu.y + dPdu.z*dPdu.z;
-                    RhFloat dPdv_len_sq = dPdv.x*dPdv.x + dPdv.y*dPdv.y + dPdv.z*dPdv.z;
-                    if (dPdv_len_sq > dPdu_len_sq) {
-                        norm = rh_vec3_normalize(dPdv);
-                    } else if (dPdu_len_sq > 1e-8f) {
-                        norm = rh_vec3_normalize(dPdu);
-                    } else {
-                        norm = rh_vec3_create(0.0f, 0.0f, 1.0f); // Default up
-                    }
-                }
+            // Use analytic normals for primitives where we know the formula
+            // This avoids numerical precision issues with finite differences
+            // (e.g., disk edges can produce wrong-sign normals)
+            if (p->type == RH_PRIM_DISK) {
+                // Disk normal is always +Z (flat surface, known analytically)
+                norm = rh_vec3_create(0.0f, 0.0f, 1.0f);
             } else {
-                norm = rh_vec3_normalize(norm);
+                // Check if cross product is degenerate (e.g., at poles of sphere, center of disk)
+                RhFloat norm_len_sq = norm.x*norm.x + norm.y*norm.y + norm.z*norm.z;
+                if (norm_len_sq < 1e-8f) {
+                    // Fallback: use analytic normals for known primitives
+                    if (p->type == RH_PRIM_SPHERE) {
+                        // For sphere centered at origin: N = normalize(P)
+                        norm = rh_vec3_normalize(pos);
+                    } else if (p->type == RH_PRIM_CYLINDER) {
+                        // For cylinder along z-axis: N = normalize(x, y, 0)
+                        norm = rh_vec3_normalize(rh_vec3_create(pos.x, pos.y, 0.0f));
+                    } else if (p->type == RH_PRIM_CONE) {
+                        // For cone along z-axis, normal depends on cone angle
+                        norm = rh_vec3_normalize(rh_vec3_create(pos.x, pos.y, 0.0f));
+                    } else if (p->type == RH_PRIM_TORUS) {
+                        // Torus normal points outward from tube center
+                        RhFloat R = p->data.torus.majorradius;
+                        RhFloat theta_rad = u * p->data.torus.theta_max * (RH_PI / 180.0f);
+                        RhVec3 ring_center = rh_vec3_create(R * cosf(theta_rad), R * sinf(theta_rad), 0.0f);
+                        norm = rh_vec3_normalize(rh_vec3_sub(pos, ring_center));
+                    } else {
+                        // Last resort: use any non-zero derivative as normal direction
+                        RhFloat dPdu_len_sq = dPdu.x*dPdu.x + dPdu.y*dPdu.y + dPdu.z*dPdu.z;
+                        RhFloat dPdv_len_sq = dPdv.x*dPdv.x + dPdv.y*dPdv.y + dPdv.z*dPdv.z;
+                        if (dPdv_len_sq > dPdu_len_sq) {
+                            norm = rh_vec3_normalize(dPdv);
+                        } else if (dPdu_len_sq > 1e-8f) {
+                            norm = rh_vec3_normalize(dPdu);
+                        } else {
+                            norm = rh_vec3_create(0.0f, 0.0f, 1.0f); // Default up
+                        }
+                    }
+                } else {
+                    norm = rh_vec3_normalize(norm);
+                }
             }
             
             int idx = j * grid->width + i;

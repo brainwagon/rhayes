@@ -41,6 +41,7 @@ typedef enum {
     RH_PRIM_PARABOLOID,
     RH_PRIM_POLYGON,
     RH_PRIM_PATCH_BICUBIC,
+    RH_PRIM_PATCH_BILINEAR,
     RH_PRIM_DISK,
     RH_PRIM_TORUS,
     RH_PRIM_HYPERBOLOID
@@ -82,6 +83,10 @@ typedef struct {
 } RhPatchBicubic;
 
 typedef struct {
+    RhVec3 cp[4]; // 4 Control Points: (0,0), (1,0), (1,1), (0,1)
+} RhPatchBilinear;
+
+typedef struct {
     RhFloat height;
     RhFloat radius;
     RhFloat theta_max;
@@ -110,6 +115,7 @@ typedef struct {
         RhParaboloid paraboloid;
         RhPolygon polygon;
         RhPatchBicubic patch;
+        RhPatchBilinear bilinear;
         RhDisk disk;
         RhTorus torus;
         RhHyperboloid hyperboloid;
@@ -137,6 +143,9 @@ RhPrimitive rh_prim_create_polygon(int count, const RhVec3* vertices);
 
 // Creates a bicubic patch (copies control points)
 RhPrimitive rh_prim_create_patch_bicubic(const RhVec3* cp, RhMat4 u_basis, RhMat4 v_basis);
+
+// Creates a bilinear patch (copies 4 control points)
+RhPrimitive rh_prim_create_patch_bilinear(const RhVec3* cp);
 
 // Frees internal data if necessary (e.g. polygon vertices)
 void rh_prim_free_data(RhPrimitive* p);

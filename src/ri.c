@@ -144,6 +144,34 @@ typedef struct {
     int capacity;
 } RhMicropolygonList;
 
+// --- A-Buffer Sample List Structures ---
+// Each subpixel maintains a depth-sorted list of samples for proper transparency
+
+typedef struct {
+    float z;            // Depth value
+    RhColor color;      // Premultiplied color (color * opacity)
+    RhColor opacity;    // Per-channel opacity
+} RhSample;
+
+typedef struct {
+    RhSample* samples;  // Depth-sorted array (front to back)
+    int count;
+    int capacity;
+    float accum_opacity_r;  // Accumulated opacity for early culling
+    float accum_opacity_g;
+    float accum_opacity_b;
+} RhSubpixelList;
+
+// Per-bucket sample storage for A-buffer rendering
+typedef struct {
+    RhSubpixelList* lists;  // Array of subpixel lists (bucket_size^2 * pixel_samples^2)
+    int num_lists;          // Total number of subpixel lists
+    int bucket_width;       // Bucket width in pixels
+    int bucket_height;      // Bucket height in pixels
+    int samples_x;          // Pixel samples in X
+    int samples_y;          // Pixel samples in Y
+} RhBucketSamples;
+
 typedef struct {
     RhRenderItem** items;
     int item_count;
@@ -301,6 +329,31 @@ typedef struct {
     // Variable declarations (RiDeclare)
     RiDeclaration declarations[MAX_DECLARATIONS];
     int num_declarations;
+
+    // Memory management for large scenes
+    struct {
+        size_t current_bytes;           // Current allocated memory estimate
+        size_t peak_bytes;              // Peak memory usage
+        size_t primitive_bytes;         // Memory used by primitives
+        size_t mpoly_queue_bytes;       // Memory used by micropolygon queues
+        size_t max_memory_bytes;        // Memory budget (0 = unlimited)
+        int primitives_dropped;         // Primitives skipped due to memory limit
+        int max_bucket_queue;           // Max mpolys queued per bucket (0 = unlimited)
+        int mpolys_dropped;             // Mpolys dropped due to queue limit
+        float opacity_threshold;        // Threshold for visibility culling (default 0.999)
+    } memory;
+
+    // A-buffer sample storage (allocated per-bucket during rendering)
+    RhBucketSamples* bucket_samples;
+
+    // Render item pool for memory reuse
+    struct {
+        RhRenderItem** free_list;       // Pool of freed items for reuse
+        int free_count;
+        int free_capacity;
+        int pool_hits;                  // Stats: items reused from pool
+        int pool_misses;                // Stats: new allocations
+    } item_pool;
 } RiContextData;
 
 static RiContextData* g_ctx = NULL;
@@ -330,8 +383,41 @@ static bool rh_mat4_equal(RhMat4 a, RhMat4 b) {
 }
 
 
+// Estimate memory size for a primitive (for tracking)
+static size_t ri_primitive_memory_size(const RhPrimitive* p) {
+    size_t size = sizeof(RhRenderItem);
+    if (p->type == RH_PRIM_POLYGON) {
+        size += p->data.polygon.count * sizeof(RhVec3);
+    }
+    if (p->num_primvars > 0 && p->primvars) {
+        for (int i = 0; i < p->num_primvars; i++) {
+            size += sizeof(RhPrimVar) + p->primvars[i].count * sizeof(float) *
+                    rh_type_component_count(p->primvars[i].type);
+        }
+    }
+    return size;
+}
+
 static RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* transform, const RhColor* color) {
-    RhRenderItem* item = (RhRenderItem*)malloc(sizeof(RhRenderItem));
+    // Check memory budget before allocating
+    size_t item_size = ri_primitive_memory_size(p);
+    if (g_ctx->memory.max_memory_bytes > 0 &&
+        g_ctx->memory.current_bytes + item_size > g_ctx->memory.max_memory_bytes) {
+        g_ctx->memory.primitives_dropped++;
+        return NULL;
+    }
+
+    // Try to reuse from pool first
+    RhRenderItem* item;
+    if (g_ctx->item_pool.free_count > 0) {
+        item = g_ctx->item_pool.free_list[--g_ctx->item_pool.free_count];
+        g_ctx->item_pool.pool_hits++;
+    } else {
+        item = (RhRenderItem*)malloc(sizeof(RhRenderItem));
+        if (!item) return NULL;
+        g_ctx->item_pool.pool_misses++;
+    }
+
     item->prim = *p;
     // Deep copy if polygon
     if (p->type == RH_PRIM_POLYGON) {
@@ -369,12 +455,43 @@ static RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* t
     item->all_items_idx = g_ctx->all_items_count;
     g_ctx->all_items[g_ctx->all_items_count++] = item;
 
+    // Track memory usage
+    g_ctx->memory.current_bytes += item_size;
+    g_ctx->memory.primitive_bytes += item_size;
+    if (g_ctx->memory.current_bytes > g_ctx->memory.peak_bytes) {
+        g_ctx->memory.peak_bytes = g_ctx->memory.current_bytes;
+    }
+
     return item;
 }
 
 static void ri_render_item_destroy(RhRenderItem* item) {
-    if (item) {
-        rh_prim_free_data(&item->prim);
+    if (!item) return;
+
+    // Track memory freed
+    size_t item_size = ri_primitive_memory_size(&item->prim);
+    g_ctx->memory.current_bytes -= item_size;
+    g_ctx->memory.primitive_bytes -= item_size;
+
+    // Free primitive data (polygon vertices, primvars)
+    rh_prim_free_data(&item->prim);
+
+    // Return item struct to pool for reuse instead of freeing
+    if (g_ctx->item_pool.free_count >= g_ctx->item_pool.free_capacity) {
+        int new_cap = g_ctx->item_pool.free_capacity == 0 ? 256 : g_ctx->item_pool.free_capacity * 2;
+        // Limit pool size to avoid unbounded growth
+        if (new_cap > 16384) new_cap = 16384;
+        if (g_ctx->item_pool.free_count < new_cap) {
+            g_ctx->item_pool.free_capacity = new_cap;
+            g_ctx->item_pool.free_list = (RhRenderItem**)realloc(
+                g_ctx->item_pool.free_list, new_cap * sizeof(RhRenderItem*));
+        }
+    }
+
+    // Add to pool if there's room, otherwise free
+    if (g_ctx->item_pool.free_count < g_ctx->item_pool.free_capacity) {
+        g_ctx->item_pool.free_list[g_ctx->item_pool.free_count++] = item;
+    } else {
         free(item);
     }
 }
@@ -389,34 +506,224 @@ static void ri_mpoly_list_init(RhMicropolygonList* list) {
 
 static void ri_mpoly_list_push(RhMicropolygonList* list, const RhMicropolygon* mpoly) {
     if (list->count >= list->capacity) {
+        int old_capacity = list->capacity;
         list->capacity = list->capacity == 0 ? 64 : list->capacity * 2;
         list->data = (RhMicropolygon*)realloc(list->data, list->capacity * sizeof(RhMicropolygon));
+        // Track memory growth
+        size_t growth = (list->capacity - old_capacity) * sizeof(RhMicropolygon);
+        g_ctx->memory.mpoly_queue_bytes += growth;
+        g_ctx->memory.current_bytes += growth;
+        if (g_ctx->memory.current_bytes > g_ctx->memory.peak_bytes) {
+            g_ctx->memory.peak_bytes = g_ctx->memory.current_bytes;
+        }
     }
     list->data[list->count++] = *mpoly;
 }
 
 static void ri_mpoly_list_clear(RhMicropolygonList* list) {
+    // Update memory tracking before clearing
+    g_ctx->memory.mpoly_queue_bytes -= list->count * sizeof(RhMicropolygon);
     list->count = 0;
     // Keep capacity and data allocated for reuse
 }
 
 static void ri_mpoly_list_free(RhMicropolygonList* list) {
     g_ctx->stats.mpolys_freed += list->count;
+    // Update memory tracking
+    g_ctx->memory.mpoly_queue_bytes -= list->capacity * sizeof(RhMicropolygon);
+    g_ctx->memory.current_bytes -= list->capacity * sizeof(RhMicropolygon);
     free(list->data);
     list->data = NULL;
     list->count = 0;
     list->capacity = 0;
 }
 
+// --- A-Buffer Sample List Functions ---
+// Note: These functions will be used when A-buffer rendering is enabled
+
+__attribute__((unused))
+static void ri_subpixel_list_init(RhSubpixelList* list) {
+    list->samples = NULL;
+    list->count = 0;
+    list->capacity = 0;
+    list->accum_opacity_r = 0.0f;
+    list->accum_opacity_g = 0.0f;
+    list->accum_opacity_b = 0.0f;
+}
+
+// Insert a sample into a subpixel list in depth-sorted order
+// Returns true if sample was inserted, false if culled due to visibility threshold
+__attribute__((unused))
+static bool ri_subpixel_list_insert(RhSubpixelList* list, float z, RhColor color, RhColor opacity) {
+    float othresh = g_ctx->memory.opacity_threshold;
+
+    // Early visibility culling: if this subpixel is already fully opaque, skip
+    if (list->accum_opacity_r >= othresh &&
+        list->accum_opacity_g >= othresh &&
+        list->accum_opacity_b >= othresh) {
+        return false;
+    }
+
+    // Find insertion point (depth-sorted, front to back)
+    int insert_pos = list->count;
+    for (int i = 0; i < list->count; i++) {
+        if (z < list->samples[i].z) {
+            insert_pos = i;
+            break;
+        }
+    }
+
+    // Calculate visibility at this depth (opacity accumulated from samples in front)
+    float vis_r = 1.0f, vis_g = 1.0f, vis_b = 1.0f;
+    for (int i = 0; i < insert_pos; i++) {
+        vis_r *= (1.0f - list->samples[i].opacity.r);
+        vis_g *= (1.0f - list->samples[i].opacity.g);
+        vis_b *= (1.0f - list->samples[i].opacity.b);
+    }
+
+    // If this sample would be invisible, don't insert it
+    float min_vis = fminf(vis_r, fminf(vis_g, vis_b));
+    if (min_vis < (1.0f - othresh)) {
+        return false;
+    }
+
+    // Grow array if needed
+    if (list->count >= list->capacity) {
+        list->capacity = list->capacity == 0 ? 4 : list->capacity * 2;
+        list->samples = (RhSample*)realloc(list->samples, list->capacity * sizeof(RhSample));
+    }
+
+    // Shift samples to make room for insertion
+    for (int i = list->count; i > insert_pos; i--) {
+        list->samples[i] = list->samples[i - 1];
+    }
+
+    // Insert the new sample
+    list->samples[insert_pos].z = z;
+    list->samples[insert_pos].color = color;
+    list->samples[insert_pos].opacity = opacity;
+    list->count++;
+
+    // Update accumulated opacity
+    list->accum_opacity_r = 0.0f;
+    list->accum_opacity_g = 0.0f;
+    list->accum_opacity_b = 0.0f;
+    float trans_r = 1.0f, trans_g = 1.0f, trans_b = 1.0f;
+    for (int i = 0; i < list->count; i++) {
+        list->accum_opacity_r += trans_r * list->samples[i].opacity.r;
+        list->accum_opacity_g += trans_g * list->samples[i].opacity.g;
+        list->accum_opacity_b += trans_b * list->samples[i].opacity.b;
+        trans_r *= (1.0f - list->samples[i].opacity.r);
+        trans_g *= (1.0f - list->samples[i].opacity.g);
+        trans_b *= (1.0f - list->samples[i].opacity.b);
+    }
+
+    return true;
+}
+
+// Composite a subpixel list front-to-back to get final color and opacity
+__attribute__((unused))
+static void ri_subpixel_list_composite(const RhSubpixelList* list, RhColor* out_color, RhColor* out_opacity) {
+    RhColor color = {0.0f, 0.0f, 0.0f};
+    float trans_r = 1.0f, trans_g = 1.0f, trans_b = 1.0f;
+
+    for (int i = 0; i < list->count; i++) {
+        // Premultiplied alpha compositing: C_out = C_front + (1 - A_front) * C_back
+        color.r += trans_r * list->samples[i].color.r;
+        color.g += trans_g * list->samples[i].color.g;
+        color.b += trans_b * list->samples[i].color.b;
+
+        trans_r *= (1.0f - list->samples[i].opacity.r);
+        trans_g *= (1.0f - list->samples[i].opacity.g);
+        trans_b *= (1.0f - list->samples[i].opacity.b);
+    }
+
+    *out_color = color;
+    out_opacity->r = 1.0f - trans_r;
+    out_opacity->g = 1.0f - trans_g;
+    out_opacity->b = 1.0f - trans_b;
+}
+
+static void ri_subpixel_list_clear(RhSubpixelList* list) {
+    list->count = 0;
+    list->accum_opacity_r = 0.0f;
+    list->accum_opacity_g = 0.0f;
+    list->accum_opacity_b = 0.0f;
+    // Keep capacity and samples allocated for reuse
+}
+
+static void ri_subpixel_list_free(RhSubpixelList* list) {
+    free(list->samples);
+    list->samples = NULL;
+    list->count = 0;
+    list->capacity = 0;
+    list->accum_opacity_r = 0.0f;
+    list->accum_opacity_g = 0.0f;
+    list->accum_opacity_b = 0.0f;
+}
+
+// Allocate bucket sample storage for A-buffer rendering
+__attribute__((unused))
+static RhBucketSamples* ri_bucket_samples_create(int bucket_width, int bucket_height, int samples_x, int samples_y) {
+    RhBucketSamples* bs = (RhBucketSamples*)malloc(sizeof(RhBucketSamples));
+    bs->bucket_width = bucket_width;
+    bs->bucket_height = bucket_height;
+    bs->samples_x = samples_x;
+    bs->samples_y = samples_y;
+    bs->num_lists = bucket_width * bucket_height * samples_x * samples_y;
+    bs->lists = (RhSubpixelList*)calloc(bs->num_lists, sizeof(RhSubpixelList));
+    for (int i = 0; i < bs->num_lists; i++) {
+        ri_subpixel_list_init(&bs->lists[i]);
+    }
+    return bs;
+}
+
+__attribute__((unused))
+static void ri_bucket_samples_clear(RhBucketSamples* bs) {
+    for (int i = 0; i < bs->num_lists; i++) {
+        ri_subpixel_list_clear(&bs->lists[i]);
+    }
+}
+
+__attribute__((unused))
+static void ri_bucket_samples_destroy(RhBucketSamples* bs) {
+    if (bs) {
+        for (int i = 0; i < bs->num_lists; i++) {
+            ri_subpixel_list_free(&bs->lists[i]);
+        }
+        free(bs->lists);
+        free(bs);
+    }
+}
+
+// Get the subpixel list for a given screen position
+__attribute__((unused))
+static RhSubpixelList* ri_bucket_samples_get(RhBucketSamples* bs, int bucket_x, int bucket_y, int subpixel_x, int subpixel_y) {
+    int px = subpixel_x / bs->samples_x;  // Pixel within bucket
+    int py = subpixel_y / bs->samples_y;
+    int sx = subpixel_x % bs->samples_x;  // Sample within pixel
+    int sy = subpixel_y % bs->samples_y;
+    (void)bucket_x; (void)bucket_y;  // Not needed, already clipped to bucket
+
+    if (px < 0 || px >= bs->bucket_width || py < 0 || py >= bs->bucket_height) {
+        return NULL;
+    }
+
+    int idx = ((py * bs->bucket_width + px) * bs->samples_y + sy) * bs->samples_x + sx;
+    return &bs->lists[idx];
+}
+
 // Convert a shaded grid to micropolygons with motion blur support
 // Grid has width*height vertices = (width-1)*(height-1) micropolygon quads
 // screen_pos: array of screen positions at t0
 // screen_pos_t1: array of screen positions at t1 (NULL if no motion blur)
+// cam_normals: array of camera-space normals for backface culling (NULL to disable culling)
 // has_motion: true if motion blur is active
 // motion_t0, motion_t1: time values from MotionBegin for remapping
 static void ri_grid_to_mpolys_motion(const RhMicroGrid* grid,
                                       const RhVec3* screen_pos,
                                       const RhVec3* screen_pos_t1,
+                                      const RhVec3* cam_normals,
                                       bool has_motion,
                                       float motion_t0,
                                       float motion_t1,
@@ -424,11 +731,6 @@ static void ri_grid_to_mpolys_motion(const RhMicroGrid* grid,
                                       RhShadingMode mode) {
     int w = grid->width;
     int h = grid->height;
-
-    // Track micropolygon statistics
-    int mpoly_count = (w - 1) * (h - 1);
-    g_ctx->stats.total_micropolygons += mpoly_count;
-    g_ctx->stats.mpolys_this_bucket += mpoly_count;
 
     for (int j = 0; j < h - 1; j++) {
         for (int i = 0; i < w - 1; i++) {
@@ -438,13 +740,27 @@ static void ri_grid_to_mpolys_motion(const RhMicroGrid* grid,
             int i01 = (j + 1) * w + i;     // bottom-left
             int i11 = (j + 1) * w + (i + 1); // bottom-right
 
+            // Get screen-space positions
+            RhVec3 v0 = screen_pos[i00];  // TL
+            RhVec3 v1 = screen_pos[i10];  // TR
+            RhVec3 v2 = screen_pos[i11];  // BR
+            RhVec3 v3 = screen_pos[i01];  // BL
+
+            // Backface culling is DISABLED until "Sides" attribute support is added
+            // The issue is that polygons and other primitives may have normals that don't
+            // follow the "front-facing = toward camera" convention. For example, a ground
+            // plane with counter-clockwise winding has a downward-pointing normal.
+            // Backface culling would incorrectly cull such primitives.
+            // TODO: Add "Attribute "dice" "int backfacecull" [1]" or "Sides 1" support
+            (void)cam_normals;
+
             RhMicropolygon mpoly;
 
             // Copy screen-space positions at t0 (v[0]=TL, v[1]=TR, v[2]=BR, v[3]=BL)
-            mpoly.v[0] = screen_pos[i00];
-            mpoly.v[1] = screen_pos[i10];
-            mpoly.v[2] = screen_pos[i11];
-            mpoly.v[3] = screen_pos[i01];
+            mpoly.v[0] = v0;
+            mpoly.v[1] = v1;
+            mpoly.v[2] = v2;
+            mpoly.v[3] = v3;
 
             // Copy screen-space positions at t1 for motion blur
             mpoly.has_motion = has_motion;
@@ -513,6 +829,10 @@ static void ri_grid_to_mpolys_motion(const RhMicroGrid* grid,
             mpoly.min_y = (int)floorf(min_y);
             mpoly.max_x = (int)ceilf(max_x);
             mpoly.max_y = (int)ceilf(max_y);
+
+            // Track statistics for non-culled micropolygons
+            g_ctx->stats.total_micropolygons++;
+            g_ctx->stats.mpolys_this_bucket++;
 
             ri_mpoly_list_push(out_list, &mpoly);
 
@@ -972,6 +1292,9 @@ static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, con
 
     RhRenderItem* item = ri_render_item_create(p, transform, color);
 
+    // Handle memory limit - primitive was dropped
+    if (!item) return;
+
     // Track primitive statistics
     if (p->type >= 0 && p->type < 9) {
         g_ctx->stats.primitives_by_type[p->type]++;
@@ -1159,6 +1482,25 @@ void RiBegin(RtToken name) {
     // Default hider options (jitter enabled)
     g_ctx->hider_options.jitter = 1;
 
+    // Initialize memory tracking
+    g_ctx->memory.current_bytes = 0;
+    g_ctx->memory.peak_bytes = 0;
+    g_ctx->memory.primitive_bytes = 0;
+    g_ctx->memory.mpoly_queue_bytes = 0;
+    g_ctx->memory.max_memory_bytes = 0;  // 0 = unlimited
+    g_ctx->memory.primitives_dropped = 0;
+    g_ctx->memory.opacity_threshold = 0.999f;  // Default: cull when 99.9% opaque
+
+    // A-buffer sample storage (allocated per-bucket during rendering)
+    g_ctx->bucket_samples = NULL;
+
+    // Initialize render item pool
+    g_ctx->item_pool.free_list = NULL;
+    g_ctx->item_pool.free_count = 0;
+    g_ctx->item_pool.free_capacity = 0;
+    g_ctx->item_pool.pool_hits = 0;
+    g_ctx->item_pool.pool_misses = 0;
+
     (void)name;
 }
 
@@ -1171,6 +1513,13 @@ void RiEnd(void) {
                 if (g_ctx->all_items[i]) ri_render_item_destroy(g_ctx->all_items[i]);
             }
             free(g_ctx->all_items);
+        }
+        // Free the item pool
+        if (g_ctx->item_pool.free_list) {
+            for (int i = 0; i < g_ctx->item_pool.free_count; i++) {
+                free(g_ctx->item_pool.free_list[i]);
+            }
+            free(g_ctx->item_pool.free_list);
         }
         if (g_ctx->objects) {
             for(int i=0; i<g_ctx->objects_count; i++) {
@@ -1410,6 +1759,29 @@ void RiOptionV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
                 } else {
                     g_ctx->stats_options.jsonfilename[0] = '\0';
                 }
+            }
+        }
+    } else if (strcmp(name, "limits") == 0) {
+        // Memory limit options for large scenes
+        for (int i = 0; i < count; i++) {
+            if (!tokens[i]) continue;
+            if (strcmp(tokens[i], "memory") == 0) {
+                // Memory limit in MB (RIB parser passes as float*)
+                float* val = (float*)values[i];
+                g_ctx->memory.max_memory_bytes = (size_t)(*val) * 1024 * 1024;
+            } else if (strcmp(tokens[i], "bucketsize") == 0) {
+                // Bucket size in pixels (RIB parser passes as float*)
+                float* val = (float*)values[i];
+                g_ctx->bucket_size = (int)(*val);
+                if (g_ctx->bucket_size < 8) g_ctx->bucket_size = 8;
+                if (g_ctx->bucket_size > 256) g_ctx->bucket_size = 256;
+            } else if (strcmp(tokens[i], "othresh") == 0) {
+                // Opacity threshold for A-buffer visibility culling
+                // When accumulated opacity exceeds this, samples are culled
+                float* val = (float*)values[i];
+                g_ctx->memory.opacity_threshold = *val;
+                if (g_ctx->memory.opacity_threshold < 0.0f) g_ctx->memory.opacity_threshold = 0.0f;
+                if (g_ctx->memory.opacity_threshold > 1.0f) g_ctx->memory.opacity_threshold = 1.0f;
             }
         }
     }
@@ -2143,6 +2515,14 @@ void RiWorldEnd(void) {
 
             fprintf(text_out, "\nPerformance timing:\n");
             fprintf(text_out, "  Bucket processing: %.3f s\n", g_ctx->timing.bucket_time);
+
+            fprintf(text_out, "\nMemory usage:\n");
+            fprintf(text_out, "  Peak:          %.2f MB\n", g_ctx->memory.peak_bytes / (1024.0 * 1024.0));
+            fprintf(text_out, "  Pool hits:     %d\n", g_ctx->item_pool.pool_hits);
+            fprintf(text_out, "  Pool misses:   %d\n", g_ctx->item_pool.pool_misses);
+            if (g_ctx->memory.primitives_dropped > 0) {
+                fprintf(text_out, "  Dropped prims: %d (memory limit reached)\n", g_ctx->memory.primitives_dropped);
+            }
         }
 
         fprintf(text_out, "============================\n\n");
@@ -2184,7 +2564,11 @@ void RiWorldEnd(void) {
                 fprintf(json_out, "  \"buckets_processed\": %d,\n", g_ctx->stats.buckets_processed);
                 fprintf(json_out, "  \"motion_mpolys\": %d,\n", g_ctx->timing.motion_mpolys);
                 fprintf(json_out, "  \"static_mpolys\": %d,\n", g_ctx->timing.static_mpolys);
-                fprintf(json_out, "  \"bucket_time_sec\": %.6f\n", g_ctx->timing.bucket_time);
+                fprintf(json_out, "  \"bucket_time_sec\": %.6f,\n", g_ctx->timing.bucket_time);
+                fprintf(json_out, "  \"memory_peak_bytes\": %zu,\n", g_ctx->memory.peak_bytes);
+                fprintf(json_out, "  \"memory_pool_hits\": %d,\n", g_ctx->item_pool.pool_hits);
+                fprintf(json_out, "  \"memory_pool_misses\": %d,\n", g_ctx->item_pool.pool_misses);
+                fprintf(json_out, "  \"primitives_dropped\": %d\n", g_ctx->memory.primitives_dropped);
                 fprintf(json_out, "}\n");
                 fclose(json_out);
             }
@@ -2440,6 +2824,26 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             }
         }
 
+        // Grid-level backface culling: skip entire grid only if ALL normals face away
+        // In camera space, view direction is along -Z, so front-facing normals have positive Z
+        // TODO: Support two-sided primitives via attribute
+        // NOTE: Disabled for now - mpoly-level culling is sufficient and more accurate
+        #if 0
+        bool all_back_facing = true;
+        for (int i = 0; i < gridSize * gridSize; i++) {
+            if (cam_normals[i].z > 0.0f) {
+                // At least one normal faces the camera
+                all_back_facing = false;
+                break;
+            }
+        }
+        if (all_back_facing) {
+            // Entire grid is back-facing, skip it
+            rh_grid_destroy(grid);
+            return;
+        }
+        #endif
+
         // Second pass: shade with proper screen-space texture derivatives
         for (int i = 0; i < gridSize * gridSize; i++) {
             int gx = i % gridSize;
@@ -2553,9 +2957,9 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
         }
 
         // Convert grid to micropolygons instead of direct rasterization
-        // Pass motion blur screen positions if available
+        // Pass motion blur screen positions and camera-space normals for backface culling
         // Note: scratch buffers are reused, no free needed
-        ri_grid_to_mpolys_motion(grid, screen_pos, screen_pos_t1, has_motion,
+        ri_grid_to_mpolys_motion(grid, screen_pos, screen_pos_t1, cam_normals, has_motion,
                                  item->motion_t0, item->motion_t1, out_mpolys, mode);
 
         rh_grid_destroy(grid);
@@ -2928,7 +3332,6 @@ void RiPatchV(RtToken type, RtToken* tokens, RtPointer* values, int count) {
     if (!g_ctx) return;
 
     // Supports "bicubic" and "bilinear"
-    // For MVP, implementing "bicubic"
 
     if (strcmp(type, "bicubic") == 0) {
         // Find the "P" parameter
@@ -2952,6 +3355,30 @@ void RiPatchV(RtToken type, RtToken* tokens, RtPointer* values, int count) {
 
         // Use current basis
         RhPrimitive p = rh_prim_create_patch_bicubic(cps, curr()->u_basis, curr()->v_basis);
+        ri_parse_primvars(&p, tokens, values, count);
+        ri_add_geometry(&p);
+        rh_prim_free_data(&p);
+    } else if (strcmp(type, "bilinear") == 0) {
+        // Find the "P" parameter
+        RtPoint* points = NULL;
+        for (int i = 0; i < count; i++) {
+            if (tokens[i] && strcmp(tokens[i], "P") == 0) {
+                points = (RtPoint*)values[i];
+                break;
+            }
+        }
+
+        if (!points) return;
+
+        // 4 control points: (0,0), (1,0), (1,1), (0,1)
+        RhVec3 cps[4];
+        for (int i = 0; i < 4; i++) {
+            cps[i].x = points[i][0];
+            cps[i].y = points[i][1];
+            cps[i].z = points[i][2];
+        }
+
+        RhPrimitive p = rh_prim_create_patch_bilinear(cps);
         ri_parse_primvars(&p, tokens, values, count);
         ri_add_geometry(&p);
         rh_prim_free_data(&p);

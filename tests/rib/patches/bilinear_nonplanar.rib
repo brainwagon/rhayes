@@ -1,0 +1,18 @@
+##RenderMan RIB-Structure 1.1
+version 3.03
+Format 200 200 1
+Display "bilinear_nonplanar.png" "file" "rgba"
+Projection "perspective" "fov" 45
+TransformBegin
+    Translate 0 0 4
+    Rotate -30 1 0 0
+    WorldBegin
+        LightSource "distantlight" "intensity" 1 "from" [0 1 1]
+        Color [0.6 0.7 0.9]
+        Surface "matte"
+        # Saddle-shaped bilinear patch (non-planar)
+        # cp[0]=(0,0), cp[1]=(1,0), cp[2]=(1,1), cp[3]=(0,1)
+        # Corners at different Z heights create saddle shape
+        Patch "bilinear" "P" [-1 -1 0.5  1 -1 -0.5  1 1 0.5  -1 1 -0.5]
+    WorldEnd
+TransformEnd
