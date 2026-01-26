@@ -107,6 +107,12 @@ RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* transfor
     item->shader = ri_curr()->current_surface_shader;
     item->shader_params = ri_curr()->current_shader_params;
     item->shading_rate = ri_curr()->shading_rate;
+
+    // Compute effective orientation flip
+    bool flipped = ri_curr()->orientation_lh ^ ((ri_curr()->reverse_orientation & 1) != 0);
+    item->orientation_flipped = flipped;
+    item->sides = ri_curr()->sides;
+
     item->processed = false;
     item->last_bucket_idx = -1;
     item->min_depth = 1e30f;   // Will be set in ri_add_to_buckets
@@ -654,6 +660,8 @@ static void ri_grid_to_mpolys_motion(const RhMicroGrid* grid,
                                       bool has_motion,
                                       float motion_t0,
                                       float motion_t1,
+                                      bool orientation_flipped,
+                                      int sides,
                                       RhMicropolygonList* out_list,
                                       RhShadingMode mode) {
     RiContextData* ctx = ri_get_ctx();
@@ -739,6 +747,9 @@ static void ri_grid_to_mpolys_motion(const RhMicroGrid* grid,
             mpoly.min_y = (int)floorf(min_y);
             mpoly.max_x = (int)ceilf(max_x);
             mpoly.max_y = (int)ceilf(max_y);
+
+            mpoly.orientation_flipped = orientation_flipped;
+            mpoly.sides = sides;
 
             ctx->stats.total_micropolygons++;
             ctx->stats.mpolys_this_bucket++;
@@ -879,8 +890,17 @@ static void ri_sample_mpoly(
                 area2 = area2_static;
             }
 
+            // Backface culling when sides=1
+            // area > 0 means CCW (front-facing in RH), area < 0 means CW (back-facing in RH)
+            // orientation_flipped inverts this
+            bool front1 = (area1 > 0) ^ mpoly->orientation_flipped;
+            bool front2 = (area2 > 0) ^ mpoly->orientation_flipped;
+            if (mpoly->sides == 1 && !front1 && !front2) {
+                continue;  // Both triangles back-facing, skip entire pixel
+            }
+
             bool drawn = false;
-            if (fabsf(area1) > 1e-6f) {
+            if (fabsf(area1) > 1e-6f && (mpoly->sides == 2 || front1)) {
                 float w0 = ri_edge_function(v1, v3, px, py);
                 float w1 = ri_edge_function(v3, v0, px, py);
                 float w2 = ri_edge_function(v0, v1, px, py);
@@ -923,7 +943,7 @@ static void ri_sample_mpoly(
                 }
             }
 
-            if (!drawn && fabsf(area2) > 1e-6f) {
+            if (!drawn && fabsf(area2) > 1e-6f && (mpoly->sides == 2 || front2)) {
                 float u0 = ri_edge_function(v2, v3, px, py);
                 float u1 = ri_edge_function(v3, v1, px, py);
                 float u2 = ri_edge_function(v1, v2, px, py);
@@ -1259,7 +1279,9 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
         }
 
         ri_grid_to_mpolys_motion(grid, screen_pos, screen_pos_t1, cam_normals, has_motion,
-                                 item->motion_t0, item->motion_t1, out_mpolys, mode);
+                                 item->motion_t0, item->motion_t1,
+                                 item->orientation_flipped, item->sides,
+                                 out_mpolys, mode);
 
         rh_grid_destroy(grid);
         ctx->grid_counter++;

@@ -322,6 +322,24 @@ static void ribout_Surface(RtToken name, RtToken* tokens, RtPointer* values, int
     fprintf(g_rib_ctx->output, "\n");
 }
 
+static void ribout_Orientation(RtToken orientation) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "Orientation \"%s\"\n", orientation ? orientation : "rh");
+}
+
+static void ribout_ReverseOrientation(void) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "ReverseOrientation\n");
+}
+
+static void ribout_Sides(RtInt nsides) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "Sides %d\n", nsides);
+}
+
 static void ribout_WorldBegin(void) {
     if (!g_rib_ctx || !g_rib_ctx->output) return;
     write_indent();
@@ -548,6 +566,9 @@ RiCallbacks ri_output_callbacks = {
     .Color = ribout_Color,
     .Opacity = ribout_Opacity,
     .Surface = ribout_Surface,
+    .Orientation = ribout_Orientation,
+    .ReverseOrientation = ribout_ReverseOrientation,
+    .Sides = ribout_Sides,
     .WorldBegin = ribout_WorldBegin,
     .WorldEnd = ribout_WorldEnd,
     .Sphere = ribout_Sphere,

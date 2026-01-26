@@ -135,6 +135,9 @@ extern RtMatrix RiPowerBasis;
 void RiColor(RtColor color);
 void RiOpacity(RtColor color);
 void RiShadingRate(RtFloat size);
+void RiOrientation(RtToken orientation);  // "rh" or "lh"
+void RiReverseOrientation(void);
+void RiSides(RtInt nsides);               // 1 or 2
 
 // 6. Scene Structure
 void RiWorldBegin(void);

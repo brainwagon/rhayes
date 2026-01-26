@@ -57,6 +57,11 @@ typedef struct {
     RhShaderFunc current_surface_shader;
     void* current_shader_params;
     float shading_rate;  // Controls splitting granularity (default 1.0)
+
+    // Orientation and sides
+    bool orientation_lh;         // false = right-handed (default), true = left-handed
+    int reverse_orientation;     // Count of ReverseOrientation calls (odd = flipped)
+    int sides;                   // 1 = front only (default), 2 = both sides
 } RiAttributeState;
 
 // --- Variable Declaration ---
@@ -86,6 +91,8 @@ typedef struct {
     int all_items_idx;   // Index in g_ctx->all_items for cleanup
     float min_depth;     // Minimum depth for front-to-back sorting
     float max_depth;     // Maximum depth for Hi-Z culling
+    bool orientation_flipped;    // Combined orientation state at primitive creation
+    int sides;                   // Sides value captured at primitive creation
 } RhRenderItem;
 
 // --- Micropolygon Types ---
@@ -107,6 +114,8 @@ typedef struct {
     RhColor center_opacity; // Center opacity (for flat shading mode)
     int min_x, min_y;  // Screen-space bounding box (union of t0 and t1)
     int max_x, max_y;
+    bool orientation_flipped;  // Orientation state for backface culling
+    int sides;                 // 1 or 2
 } RhMicropolygon;
 
 typedef struct {

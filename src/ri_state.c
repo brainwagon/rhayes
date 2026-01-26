@@ -266,3 +266,25 @@ void RiShadingRate(RtFloat size) {
     if (!ctx) return;
     ri_curr()->shading_rate = size;
 }
+
+void RiOrientation(RtToken orientation) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    if (orientation && strcmp(orientation, "lh") == 0) {
+        ri_curr()->orientation_lh = true;
+    } else {
+        ri_curr()->orientation_lh = false;  // default "rh"
+    }
+}
+
+void RiReverseOrientation(void) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    ri_curr()->reverse_orientation++;
+}
+
+void RiSides(RtInt nsides) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    ri_curr()->sides = (nsides == 2) ? 2 : 1;
+}

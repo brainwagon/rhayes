@@ -378,6 +378,31 @@ static int parse_ShadingRate(RibParser* p) {
     return 0;
 }
 
+static int parse_Orientation(RibParser* p) {
+    char orientation[64];
+    if (expect_string(p, orientation, sizeof(orientation)) < 0) return -1;
+    if (p->callbacks->Orientation) {
+        p->callbacks->Orientation(orientation);
+    }
+    return 0;
+}
+
+static int cmd_ReverseOrientation(RibParser* p) {
+    if (p->callbacks->ReverseOrientation) {
+        p->callbacks->ReverseOrientation();
+    }
+    return 0;
+}
+
+static int parse_Sides(RibParser* p) {
+    double n;
+    if (expect_number(p, &n) < 0) return -1;
+    if (p->callbacks->Sides) {
+        p->callbacks->Sides((RtInt)n);
+    }
+    return 0;
+}
+
 static int parse_Option(RibParser* p) {
     char name[64];
     if (expect_string(p, name, sizeof(name)) < 0) return -1;
@@ -900,16 +925,19 @@ static const CommandEntry commands[] = {
     {"ObjectInstance", parse_ObjectInstance},
     {"Opacity", parse_Opacity},
     {"Option", parse_Option},
+    {"Orientation", parse_Orientation},
     {"Paraboloid", parse_Paraboloid},
     {"Patch", parse_Patch},
     {"PixelFilter", parse_PixelFilter},
     {"PixelSamples", parse_PixelSamples},
     {"Polygon", parse_Polygon},
     {"Projection", parse_Projection},
+    {"ReverseOrientation", cmd_ReverseOrientation},
     {"Rotate", parse_Rotate},
     {"Scale", parse_Scale},
     {"ShadingRate", parse_ShadingRate},
     {"Shutter", parse_Shutter},
+    {"Sides", parse_Sides},
     {"Sphere", parse_Sphere},
     {"Surface", parse_Surface},
     {"Torus", parse_Torus},

@@ -63,6 +63,11 @@ void RiBegin(RtToken name) {
     g_ctx->stack[0].current_shader_params = NULL;
     g_ctx->stack[0].shading_rate = 1.0f; // Default ShadingRate
 
+    // Default Orientation and Sides
+    g_ctx->stack[0].orientation_lh = false;       // Right-handed by default
+    g_ctx->stack[0].reverse_orientation = 0;
+    g_ctx->stack[0].sides = 1;                    // Front-only by default (backface culling)
+
     // Default Projection (Perspective)
     g_ctx->projection = rh_mat4_identity();
 
