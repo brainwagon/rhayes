@@ -84,6 +84,8 @@ typedef struct {
     bool processed;      // Has this primitive been split/diced/shaded?
     int last_bucket_idx; // Linear index of last bucket containing this item
     int all_items_idx;   // Index in g_ctx->all_items for cleanup
+    float min_depth;     // Minimum depth for front-to-back sorting
+    float max_depth;     // Maximum depth for Hi-Z culling
 } RhRenderItem;
 
 // --- Micropolygon Types ---
@@ -162,6 +164,19 @@ typedef struct {
     int item_capacity;
     RhMicropolygonList queued;  // Micropolygons forwarded from earlier buckets
 } RhBucket;
+
+// --- Hierarchical Z-Buffer (Hi-Z) for Occlusion Culling ---
+
+#define MAX_HIZ_LEVELS 8
+
+typedef struct {
+    float* levels[MAX_HIZ_LEVELS];  // Pyramid (level 0 = full res)
+    int width[MAX_HIZ_LEVELS];
+    int height[MAX_HIZ_LEVELS];
+    int num_levels;
+    int base_offset_x;              // Bucket offset in screen coords
+    int base_offset_y;
+} RhHiZBuffer;
 
 // --- Light Structure ---
 
@@ -266,7 +281,7 @@ typedef struct {
 
     // Rendering statistics
     struct {
-        int primitives_by_type[9];  // Indexed by RhPrimitiveType
+        int primitives_by_type[10];  // Indexed by RhPrimitiveType
         int grids_by_size[17];      // Index 0 unused, 1-16 for grid sizes
         int total_grids;
         int total_micropolygons;
@@ -278,6 +293,9 @@ typedef struct {
         int peak_grids_per_bucket;  // Max grids in any bucket
         int mpolys_this_bucket;     // Mpolys in current bucket
         int peak_mpolys_per_bucket; // Max mpolys in any bucket
+        // Occlusion culling statistics
+        int grids_culled;           // Grids skipped by Hi-Z
+        int grids_shaded;           // Grids actually shaded
     } stats;
 
     // Performance timing statistics
@@ -326,6 +344,9 @@ typedef struct {
 
     // A-buffer sample storage (allocated per-bucket during rendering)
     RhBucketSamples* bucket_samples;
+
+    // Hierarchical Z-buffer for occlusion culling (allocated per-bucket)
+    RhHiZBuffer* bucket_hiz;
 
     // Render item pool for memory reuse
     struct {

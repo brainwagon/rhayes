@@ -79,6 +79,8 @@ RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* transfor
     item->shading_rate = ri_curr()->shading_rate;
     item->processed = false;
     item->last_bucket_idx = -1;
+    item->min_depth = 1e30f;   // Will be set in ri_add_to_buckets
+    item->max_depth = -1e30f;
 
     // Add to global list for cleanup
     if (ctx->all_items_count >= ctx->all_items_capacity) {
@@ -341,6 +343,164 @@ static RhSubpixelList* ri_bucket_samples_get(RhBucketSamples* bs, int bucket_x, 
 
     int idx = ((py * bs->bucket_width + px) * bs->samples_y + sy) * bs->samples_x + sx;
     return &bs->lists[idx];
+}
+
+// --- Hierarchical Z-Buffer Functions ---
+
+static RhHiZBuffer* ri_hiz_create(int width, int height, int offset_x, int offset_y) {
+    RhHiZBuffer* hiz = (RhHiZBuffer*)malloc(sizeof(RhHiZBuffer));
+    if (!hiz) return NULL;
+
+    hiz->base_offset_x = offset_x;
+    hiz->base_offset_y = offset_y;
+
+    // Build pyramid levels until size reaches 1x1 or we hit max levels
+    int w = width;
+    int h = height;
+    hiz->num_levels = 0;
+
+    for (int level = 0; level < MAX_HIZ_LEVELS && (w >= 1 || h >= 1); level++) {
+        hiz->width[level] = w > 0 ? w : 1;
+        hiz->height[level] = h > 0 ? h : 1;
+        hiz->levels[level] = (float*)malloc(hiz->width[level] * hiz->height[level] * sizeof(float));
+
+        // Initialize to max depth (far plane)
+        for (int i = 0; i < hiz->width[level] * hiz->height[level]; i++) {
+            hiz->levels[level][i] = 1e30f;
+        }
+
+        hiz->num_levels++;
+        if (w <= 1 && h <= 1) break;
+        w = (w + 1) / 2;
+        h = (h + 1) / 2;
+    }
+
+    return hiz;
+}
+
+static void ri_hiz_destroy(RhHiZBuffer* hiz) {
+    if (!hiz) return;
+    for (int i = 0; i < hiz->num_levels; i++) {
+        free(hiz->levels[i]);
+    }
+    free(hiz);
+}
+
+// Update Hi-Z after writing a pixel at (x, y) with depth z
+// x, y are in screen coordinates (not bucket-local)
+static void ri_hiz_update(RhHiZBuffer* hiz, int x, int y, float z) {
+    if (!hiz) return;
+
+    // Convert to bucket-local coordinates
+    int lx = x - hiz->base_offset_x;
+    int ly = y - hiz->base_offset_y;
+
+    // Update level 0 (full resolution)
+    if (lx < 0 || lx >= hiz->width[0] || ly < 0 || ly >= hiz->height[0]) return;
+
+    int idx = ly * hiz->width[0] + lx;
+    if (z < hiz->levels[0][idx]) {
+        hiz->levels[0][idx] = z;
+
+        // Propagate minimum to coarser levels
+        for (int level = 1; level < hiz->num_levels; level++) {
+            lx /= 2;
+            ly /= 2;
+            if (lx >= hiz->width[level]) lx = hiz->width[level] - 1;
+            if (ly >= hiz->height[level]) ly = hiz->height[level] - 1;
+
+            idx = ly * hiz->width[level] + lx;
+            if (z < hiz->levels[level][idx]) {
+                hiz->levels[level][idx] = z;
+            } else {
+                break;  // No need to propagate further if not smaller
+            }
+        }
+    }
+}
+
+// Test if a rectangle is fully occluded (all pixels behind existing geometry)
+// Returns true if the region is FULLY occluded and can be skipped
+// min_x, min_y, max_x, max_y are in screen coordinates
+// min_depth is the closest depth value of the region to test
+static bool ri_hiz_test_occluded(RhHiZBuffer* hiz, int min_x, int min_y,
+                                  int max_x, int max_y, float min_depth) {
+    if (!hiz) return false;
+
+    // Convert to bucket-local coordinates
+    int lmin_x = min_x - hiz->base_offset_x;
+    int lmin_y = min_y - hiz->base_offset_y;
+    int lmax_x = max_x - hiz->base_offset_x;
+    int lmax_y = max_y - hiz->base_offset_y;
+
+    // Clamp to bucket bounds
+    if (lmin_x < 0) lmin_x = 0;
+    if (lmin_y < 0) lmin_y = 0;
+    if (lmax_x >= hiz->width[0]) lmax_x = hiz->width[0] - 1;
+    if (lmax_y >= hiz->height[0]) lmax_y = hiz->height[0] - 1;
+
+    // If region is entirely outside bucket, it's not occluded by THIS bucket
+    if (lmin_x > lmax_x || lmin_y > lmax_y) return false;
+
+    // Find the coarsest level where we can do a single lookup
+    // that covers the entire region
+    int level = 0;
+
+    while (level < hiz->num_levels - 1) {
+        // Check if region fits in a single cell at next level
+        int scale = 1 << (level + 1);
+        int cell_min_x = lmin_x / scale;
+        int cell_max_x = lmax_x / scale;
+        int cell_min_y = lmin_y / scale;
+        int cell_max_y = lmax_y / scale;
+
+        if (cell_min_x == cell_max_x && cell_min_y == cell_max_y) {
+            level++;
+        } else {
+            break;
+        }
+    }
+
+    // At this level, check all cells that cover our region
+    int scale = 1 << level;
+    int cell_min_x = lmin_x / scale;
+    int cell_max_x = lmax_x / scale;
+    int cell_min_y = lmin_y / scale;
+    int cell_max_y = lmax_y / scale;
+
+    // Clamp to level bounds
+    if (cell_min_x < 0) cell_min_x = 0;
+    if (cell_min_y < 0) cell_min_y = 0;
+    if (cell_max_x >= hiz->width[level]) cell_max_x = hiz->width[level] - 1;
+    if (cell_max_y >= hiz->height[level]) cell_max_y = hiz->height[level] - 1;
+
+    // Hi-Z stores the minimum (closest) z at each cell.
+    // For a grid to be fully occluded, ALL pixels must be behind existing geometry.
+    // So we need: grid_min_z > hiz_z for ALL cells in the coverage.
+    // Find the maximum Hi-Z value in the region (the farthest of the closest points).
+    float max_hiz_depth = -1e30f;
+    for (int cy = cell_min_y; cy <= cell_max_y; cy++) {
+        for (int cx = cell_min_x; cx <= cell_max_x; cx++) {
+            int idx = cy * hiz->width[level] + cx;
+            float val = hiz->levels[level][idx];
+            if (val > max_hiz_depth) {
+                max_hiz_depth = val;
+            }
+        }
+    }
+
+    // Grid is occluded if its closest point is farther than ALL Hi-Z values
+    return min_depth > max_hiz_depth;
+}
+
+// --- Front-to-Back Sorting Comparison ---
+
+static int ri_compare_item_depth(const void* a, const void* b) {
+    RhRenderItem* ia = *(RhRenderItem**)a;
+    RhRenderItem* ib = *(RhRenderItem**)b;
+    if (ia->min_depth < ib->min_depth) return -1;
+    if (ia->min_depth > ib->min_depth) return 1;
+    return 0;
 }
 
 // --- Rasterization Helpers ---
@@ -709,6 +869,9 @@ static void ri_sample_mpoly(
                     if (z < r->zbuffer[idx]) {
                         r->zbuffer[idx] = z;
 
+                        // Update Hi-Z buffer
+                        ri_hiz_update(ctx->bucket_hiz, x, y, z);
+
                         RhColor final_color;
                         RhColor final_opacity;
                         if (mode == RH_SHADE_CENTER) {
@@ -748,6 +911,9 @@ static void ri_sample_mpoly(
                     int idx = y * r->width + x;
                     if (z < r->zbuffer[idx]) {
                         r->zbuffer[idx] = z;
+
+                        // Update Hi-Z buffer
+                        ri_hiz_update(ctx->bucket_hiz, x, y, z);
 
                         RhColor final_color;
                         RhColor final_opacity;
@@ -915,6 +1081,43 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             }
         }
 
+        // Compute grid screen bounds and min depth for Hi-Z culling
+        int grid_min_x = (int)1e9, grid_max_x = -1;
+        int grid_min_y = (int)1e9, grid_max_y = -1;
+        float grid_min_depth = 1e30f;
+
+        for (int i = 0; i < gridSize * gridSize; i++) {
+            int sx = (int)floorf(screen_pos[i].x);
+            int sy = (int)floorf(screen_pos[i].y);
+            if (sx < grid_min_x) grid_min_x = sx;
+            if (sx > grid_max_x) grid_max_x = sx;
+            if (sy < grid_min_y) grid_min_y = sy;
+            if (sy > grid_max_y) grid_max_y = sy;
+            if (screen_pos[i].z < grid_min_depth) grid_min_depth = screen_pos[i].z;
+
+            // Also check t1 positions for motion blur
+            if (has_motion) {
+                int sx_t1 = (int)floorf(screen_pos_t1[i].x);
+                int sy_t1 = (int)floorf(screen_pos_t1[i].y);
+                if (sx_t1 < grid_min_x) grid_min_x = sx_t1;
+                if (sx_t1 > grid_max_x) grid_max_x = sx_t1;
+                if (sy_t1 < grid_min_y) grid_min_y = sy_t1;
+                if (sy_t1 > grid_max_y) grid_max_y = sy_t1;
+                if (screen_pos_t1[i].z < grid_min_depth) grid_min_depth = screen_pos_t1[i].z;
+            }
+        }
+
+        // Hi-Z occlusion test - skip shading if grid is fully occluded
+        if (ctx->bucket_hiz &&
+            ri_hiz_test_occluded(ctx->bucket_hiz, grid_min_x, grid_min_y,
+                                 grid_max_x, grid_max_y, grid_min_depth)) {
+            ctx->stats.grids_culled++;
+            rh_grid_destroy(grid);
+            return;
+        }
+
+        ctx->stats.grids_shaded++;
+
         for (int i = 0; i < gridSize * gridSize; i++) {
             int gx = i % gridSize;
             int gy = i / gridSize;
@@ -1047,6 +1250,11 @@ void RiWorldBegin(void) {
     ctx->all_items_count = 0;
     ctx->grid_counter = 0;
 
+    // Initialize occlusion culling state
+    ctx->bucket_hiz = NULL;
+    ctx->stats.grids_culled = 0;
+    ctx->stats.grids_shaded = 0;
+
     RiAttributeBegin();
     RiIdentity();
 }
@@ -1076,6 +1284,16 @@ void RiWorldEnd(void) {
             int clip_max_x = rh_min((bx + 1) * ctx->bucket_size - 1, ss_xres - 1);
             int clip_min_y = by * ctx->bucket_size;
             int clip_max_y = rh_min((by + 1) * ctx->bucket_size - 1, ss_yres - 1);
+
+            // Sort bucket items front-to-back for early Z rejection
+            if (b->item_count > 1) {
+                qsort(b->items, b->item_count, sizeof(RhRenderItem*), ri_compare_item_depth);
+            }
+
+            // Create Hi-Z buffer for this bucket
+            int bucket_width = clip_max_x - clip_min_x + 1;
+            int bucket_height = clip_max_y - clip_min_y + 1;
+            ctx->bucket_hiz = ri_hiz_create(bucket_width, bucket_height, clip_min_x, clip_min_y);
 
             for (int qi = 0; qi < b->queued.count; qi++) {
                 ri_sample_mpoly(ctx->raster, &b->queued.data[qi],
@@ -1139,6 +1357,10 @@ void RiWorldEnd(void) {
             if (ctx->stats.mpolys_this_bucket > ctx->stats.peak_mpolys_per_bucket) {
                 ctx->stats.peak_mpolys_per_bucket = ctx->stats.mpolys_this_bucket;
             }
+
+            // Destroy Hi-Z buffer for this bucket
+            ri_hiz_destroy(ctx->bucket_hiz);
+            ctx->bucket_hiz = NULL;
 
             free(b->items);
             b->items = NULL;
@@ -1222,10 +1444,10 @@ void RiWorldEnd(void) {
     if (ctx->stats_options.endofframe >= 1) {
         const char* prim_names[] = {
             "Sphere", "Cylinder", "Cone", "Paraboloid", "Polygon",
-            "Patch (bicubic)", "Disk", "Torus", "Hyperboloid"
+            "Patch (bicubic)", "Patch (bilinear)", "Disk", "Torus", "Hyperboloid"
         };
         int total_prims = 0;
-        for (int i = 0; i < 9; i++) {
+        for (int i = 0; i < 10; i++) {
             total_prims += ctx->stats.primitives_by_type[i];
         }
 
@@ -1237,7 +1459,7 @@ void RiWorldEnd(void) {
 
         fprintf(text_out, "\n=== Rendering Statistics ===\n");
         fprintf(text_out, "Primitives: %d total\n", total_prims);
-        for (int i = 0; i < 9; i++) {
+        for (int i = 0; i < 10; i++) {
             if (ctx->stats.primitives_by_type[i] > 0) {
                 fprintf(text_out, "  %-16s: %d\n", prim_names[i], ctx->stats.primitives_by_type[i]);
             }
@@ -1250,6 +1472,16 @@ void RiWorldEnd(void) {
         fprintf(text_out, "  Allocated:   %d\n", ctx->stats.total_grids);
         fprintf(text_out, "  Peak/bucket: %d\n", ctx->stats.peak_grids_per_bucket);
         fprintf(text_out, "  Avg/bucket:  %.1f\n", avg_grids);
+
+        // Occlusion culling statistics
+        if (ctx->stats.grids_culled > 0 || ctx->stats.grids_shaded > 0) {
+            int total_grids_tested = ctx->stats.grids_culled + ctx->stats.grids_shaded;
+            float cull_pct = total_grids_tested > 0 ?
+                (100.0f * ctx->stats.grids_culled / total_grids_tested) : 0;
+            fprintf(text_out, "\nOcclusion Culling:\n");
+            fprintf(text_out, "  Grids shaded: %d\n", ctx->stats.grids_shaded);
+            fprintf(text_out, "  Grids culled: %d (%.1f%%)\n", ctx->stats.grids_culled, cull_pct);
+        }
 
         float avg_mpolys = num_buckets > 0 ?
             (float)ctx->stats.total_micropolygons / num_buckets : 0;
@@ -1293,7 +1525,7 @@ void RiWorldEnd(void) {
                 fprintf(json_out, "{\n");
                 fprintf(json_out, "  \"primitives\": {\n");
                 int first = 1;
-                for (int i = 0; i < 9; i++) {
+                for (int i = 0; i < 10; i++) {
                     if (ctx->stats.primitives_by_type[i] > 0) {
                         if (!first) fprintf(json_out, ",\n");
                         fprintf(json_out, "    \"%s\": %d", prim_names[i], ctx->stats.primitives_by_type[i]);
@@ -1314,6 +1546,8 @@ void RiWorldEnd(void) {
                 }
                 fprintf(json_out, "\n  },\n");
                 fprintf(json_out, "  \"grids_total\": %d,\n", ctx->stats.total_grids);
+                fprintf(json_out, "  \"grids_shaded\": %d,\n", ctx->stats.grids_shaded);
+                fprintf(json_out, "  \"grids_culled\": %d,\n", ctx->stats.grids_culled);
                 fprintf(json_out, "  \"grids_peak_per_bucket\": %d,\n", ctx->stats.peak_grids_per_bucket);
                 fprintf(json_out, "  \"micropolygons_total\": %d,\n", ctx->stats.total_micropolygons);
                 fprintf(json_out, "  \"micropolygons_freed\": %d,\n", ctx->stats.mpolys_freed);

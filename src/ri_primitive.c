@@ -204,6 +204,7 @@ static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, con
 
     float min_x = (float)ctx->ss_xres, max_x = 0;
     float min_y = (float)ctx->ss_yres, max_y = 0;
+    float min_depth = 1e30f, max_depth = -1e30f;
 
     // Project bounding box corners at t0
     for (int i = 0; i < 8; i++) {
@@ -214,6 +215,9 @@ static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, con
         if (rx > max_x) max_x = rx;
         if (ry < min_y) min_y = ry;
         if (ry > max_y) max_y = ry;
+        // Track depth bounds for front-to-back sorting and Hi-Z culling
+        if (p_ndc.z < min_depth) min_depth = p_ndc.z;
+        if (p_ndc.z > max_depth) max_depth = p_ndc.z;
     }
 
     // For motion blur: also project at t1 and use union of bounds
@@ -227,8 +231,15 @@ static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, con
             if (rx > max_x) max_x = rx;
             if (ry < min_y) min_y = ry;
             if (ry > max_y) max_y = ry;
+            // Track depth bounds across motion range
+            if (p_ndc.z < min_depth) min_depth = p_ndc.z;
+            if (p_ndc.z > max_depth) max_depth = p_ndc.z;
         }
     }
+
+    // Store depth bounds for front-to-back sorting and Hi-Z culling
+    item->min_depth = min_depth;
+    item->max_depth = max_depth;
 
     int b_min_x = (int)floorf(min_x / ctx->bucket_size);
     int b_max_x = (int)floorf(max_x / ctx->bucket_size);
