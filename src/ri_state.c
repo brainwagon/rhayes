@@ -1,0 +1,268 @@
+/**
+ * ri_state.c - Graphics state management
+ *
+ * Handles transform/attribute stacks, motion blur, and transformations.
+ */
+
+#include "ri_internal.h"
+
+// --- State Stack ---
+
+void RiTransformBegin(void) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx || ctx->stack_ptr >= MAX_STACK_DEPTH - 1) return;
+    int p = ctx->stack_ptr;
+    ctx->stack_ptr++;
+    // Copy entire state (including shaders) for simplicity
+    // In strict RenderMan, TransformBegin only saves CTM, but we need
+    // shaders to be available for geometry created in this scope
+    ctx->stack[ctx->stack_ptr] = ctx->stack[p];
+}
+
+void RiTransformEnd(void) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx || ctx->stack_ptr <= 0) return;
+    // If strict compliance: only restore transformation.
+    // RhMat4 t = ctx->stack[ctx->stack_ptr - 1].transform; // Previous transform
+
+    // Restore transform (pop logic usually handles this just by decr pointer)
+    // But we need to ensure we didn't accidentally pop attributes if this was TransformEnd.
+    // Standard says TransformBegin/End saves "Current Transformation".
+    // AttributeBegin/End saves everything.
+    // To do this right with one stack, we just use AttributeBegin/End logic for now.
+    ctx->stack_ptr--;
+}
+
+void RiAttributeBegin(void) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx || ctx->stack_ptr >= MAX_STACK_DEPTH - 1) return;
+    int p = ctx->stack_ptr;
+    ctx->stack_ptr++;
+    ctx->stack[ctx->stack_ptr] = ctx->stack[p];
+}
+
+void RiAttributeEnd(void) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx || ctx->stack_ptr <= 0) return;
+    ctx->stack_ptr--;
+}
+
+// --- Motion Blur ---
+
+void RiMotionBeginV(RtInt n, RtFloat* times) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    if (n != 2) {
+        fprintf(stderr, "Warning: RiMotionBegin only supports n=2 (two-sample motion)\n");
+        return;
+    }
+    if (ctx->motion_active) {
+        fprintf(stderr, "Warning: Nested MotionBegin blocks not supported\n");
+        return;
+    }
+
+    ctx->motion_active = true;
+    ctx->motion_sample_index = 0;
+
+    // Store times directly - remapping to shutter interval happens in rasterization
+    ctx->motion_times[0] = times[0];
+    ctx->motion_times[1] = times[1];
+
+    // Save the current transform as the starting point for both
+    // The first transform call will update transform (t0)
+    // The second will update transform_t1
+    ri_curr()->transform_t1 = ri_curr()->transform;
+}
+
+void RiMotionBegin(RtInt n, ...) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    if (n != 2) {
+        fprintf(stderr, "Warning: RiMotionBegin only supports n=2 (two-sample motion)\n");
+        return;
+    }
+
+    RtFloat times[2];
+    va_list ap;
+    va_start(ap, n);
+    for (int i = 0; i < n; i++) {
+        times[i] = (RtFloat)va_arg(ap, double);
+    }
+    va_end(ap);
+
+    RiMotionBeginV(n, times);
+}
+
+void RiMotionEnd(void) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    if (!ctx->motion_active) {
+        fprintf(stderr, "Warning: RiMotionEnd without RiMotionBegin\n");
+        return;
+    }
+
+    ctx->motion_active = false;
+    ctx->motion_sample_index = 0;
+
+    // Mark that this attribute state has motion if transforms differ
+    if (!rh_mat4_equal(ri_curr()->transform, ri_curr()->transform_t1)) {
+        ri_curr()->has_motion = true;
+    }
+}
+
+// --- Transformations ---
+
+void RiIdentity(void) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    if (ctx->motion_active) {
+        if (ctx->motion_sample_index == 0) {
+            ri_curr()->transform = rh_mat4_identity();
+        } else {
+            ri_curr()->transform_t1 = rh_mat4_identity();
+        }
+        ctx->motion_sample_index++;
+    } else {
+        ri_curr()->transform = rh_mat4_identity();
+        ri_curr()->transform_t1 = rh_mat4_identity();
+    }
+}
+
+void RiTransform(RtMatrix transform) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    // Copy RtMatrix to RhMat4
+    RhMat4 m;
+    memcpy(m.m, transform, sizeof(RtMatrix));
+    if (ctx->motion_active) {
+        if (ctx->motion_sample_index == 0) {
+            ri_curr()->transform = m;
+        } else {
+            ri_curr()->transform_t1 = m;
+        }
+        ctx->motion_sample_index++;
+    } else {
+        ri_curr()->transform = m;
+        ri_curr()->transform_t1 = m;
+    }
+}
+
+void RiConcatTransform(RtMatrix transform) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    RhMat4 m;
+    memcpy(m.m, transform, sizeof(RtMatrix));
+    // Standard RenderMan: CTM = CTM * transform
+    if (ctx->motion_active) {
+        if (ctx->motion_sample_index == 0) {
+            ri_curr()->transform = rh_mat4_mul(ri_curr()->transform, m);
+        } else {
+            ri_curr()->transform_t1 = rh_mat4_mul(ri_curr()->transform_t1, m);
+        }
+        ctx->motion_sample_index++;
+    } else {
+        ri_curr()->transform = rh_mat4_mul(ri_curr()->transform, m);
+        ri_curr()->transform_t1 = ri_curr()->transform;
+    }
+}
+
+void RiTranslate(RtFloat dx, RtFloat dy, RtFloat dz) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    RhMat4 m = rh_mat4_translate(dx, dy, dz);
+    if (ctx->motion_active) {
+        if (ctx->motion_sample_index == 0) {
+            ri_curr()->transform = rh_mat4_mul(ri_curr()->transform, m);
+        } else {
+            ri_curr()->transform_t1 = rh_mat4_mul(ri_curr()->transform_t1, m);
+        }
+        ctx->motion_sample_index++;
+    } else {
+        ri_curr()->transform = rh_mat4_mul(ri_curr()->transform, m);
+        ri_curr()->transform_t1 = ri_curr()->transform;
+    }
+}
+
+void RiRotate(RtFloat angle, RtFloat dx, RtFloat dy, RtFloat dz) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+
+    float rad = angle * (RH_PI / 180.0f);
+    float c = cosf(rad);
+    float s = sinf(rad);
+    float inv_c = 1.0f - c;
+
+    // Normalize axis
+    float len = sqrtf(dx*dx + dy*dy + dz*dz);
+    if (len > 0) { dx/=len; dy/=len; dz/=len; }
+
+    RhMat4 m = rh_mat4_identity();
+    m.m[0][0] = dx*dx*inv_c + c;    m.m[0][1] = dx*dy*inv_c - dz*s; m.m[0][2] = dx*dz*inv_c + dy*s;
+    m.m[1][0] = dy*dx*inv_c + dz*s; m.m[1][1] = dy*dy*inv_c + c;    m.m[1][2] = dy*dz*inv_c - dx*s;
+    m.m[2][0] = dz*dx*inv_c - dy*s; m.m[2][1] = dz*dy*inv_c + dx*s; m.m[2][2] = dz*dz*inv_c + c;
+
+    if (ctx->motion_active) {
+        if (ctx->motion_sample_index == 0) {
+            ri_curr()->transform = rh_mat4_mul(ri_curr()->transform, m);
+        } else {
+            ri_curr()->transform_t1 = rh_mat4_mul(ri_curr()->transform_t1, m);
+        }
+        ctx->motion_sample_index++;
+    } else {
+        ri_curr()->transform = rh_mat4_mul(ri_curr()->transform, m);
+        ri_curr()->transform_t1 = ri_curr()->transform;
+    }
+}
+
+void RiScale(RtFloat sx, RtFloat sy, RtFloat sz) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    RhMat4 m = rh_mat4_scale(sx, sy, sz);
+    if (ctx->motion_active) {
+        if (ctx->motion_sample_index == 0) {
+            ri_curr()->transform = rh_mat4_mul(ri_curr()->transform, m);
+        } else {
+            ri_curr()->transform_t1 = rh_mat4_mul(ri_curr()->transform_t1, m);
+        }
+        ctx->motion_sample_index++;
+    } else {
+        ri_curr()->transform = rh_mat4_mul(ri_curr()->transform, m);
+        ri_curr()->transform_t1 = ri_curr()->transform;
+    }
+}
+
+void RiBasis(RtMatrix ubasis, RtInt ustep, RtMatrix vbasis, RtInt vstep) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+
+    // Copy RtMatrix to RhMat4
+    RhMat4 um, vm;
+    memcpy(um.m, ubasis, sizeof(RtMatrix));
+    memcpy(vm.m, vbasis, sizeof(RtMatrix));
+
+    ri_curr()->u_basis = um;
+    ri_curr()->u_step = ustep;
+    ri_curr()->v_basis = vm;
+    ri_curr()->v_step = vstep;
+}
+
+// --- Attributes ---
+
+void RiColor(RtColor color) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    ri_curr()->color.r = color[0];
+    ri_curr()->color.g = color[1];
+    ri_curr()->color.b = color[2];
+}
+
+void RiOpacity(RtColor color) {
+    // Not implemented in rasterizer yet
+    (void)color;
+}
+
+void RiShadingRate(RtFloat size) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    ri_curr()->shading_rate = size;
+}
