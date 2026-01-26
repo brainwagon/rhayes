@@ -987,6 +987,27 @@ static float ri_compute_screen_area(const RhPrimitive* p, const RhMat4* mvp) {
     return ri_compute_screen_area_motion(p, mvp, NULL);
 }
 
+// Compute adaptive grid size based on screen-space area and shading rate.
+// Returns grid dimension (same for u and v) in range [MIN_GRID_SIZE, MAX_GRID_SIZE].
+// Target: each micropolygon should be ~1 pixel × shading_rate.
+static int ri_compute_grid_size(float screen_area, float shading_rate) {
+    // Guard against division by zero
+    if (shading_rate <= 0.0f) shading_rate = 1.0f;
+
+    // Each micropolygon (grid cell) should cover approximately shading_rate pixels.
+    // For a grid of size N×N, we have (N-1)×(N-1) quads covering screen_area pixels.
+    // So: (N-1)² ≈ screen_area / shading_rate
+    // Therefore: N ≈ sqrt(screen_area / shading_rate) + 1
+    float target_cells = screen_area / shading_rate;
+    int grid_size = (int)(sqrtf(target_cells) + 1.5f);  // +1 for vertices vs cells, +0.5 for rounding
+
+    // Clamp to valid range
+    if (grid_size < MIN_GRID_SIZE) grid_size = MIN_GRID_SIZE;
+    if (grid_size > MAX_GRID_SIZE) grid_size = MAX_GRID_SIZE;
+
+    return grid_size;
+}
+
 // Process primitive and output micropolygons
 static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropolygonList* out_mpolys, RhShadingMode mode) {
     RiContextData* ctx = ri_get_ctx();
@@ -1017,7 +1038,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             rh_prim_free_data(&children[i]);
         }
     } else {
-        int gridSize = MAX_GRID_SIZE;
+        int gridSize = ri_compute_grid_size(screen_area, item->shading_rate);
 
         RhMicroGrid* grid = rh_grid_create(gridSize, gridSize);
         if (!grid) return;
