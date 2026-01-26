@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Global verbose flag (set via -v command line option)
+// Global verbose level (incremented via -v command line option)
 static int g_verbose = 0;
 // Global progress flag (set via -p command line option)
 static int g_progress = 0;
@@ -16,8 +16,8 @@ static int g_progress = 0;
 
 static void render_Begin(RtToken name) {
     RiBegin(name);
-    if (g_verbose) {
-        RtInt level = 1;
+    if (g_verbose > 0) {
+        RtInt level = g_verbose;
         RiOption("statistics", "endofframe", &level, RI_NULL);
     }
     if (g_progress) {
@@ -294,7 +294,7 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
-            g_verbose = 1;
+            g_verbose++;
         } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--progress") == 0) {
             g_progress = 1;
         } else if (argv[i][0] != '-') {
@@ -304,7 +304,7 @@ int main(int argc, char** argv) {
 
     if (!filename) {
         fprintf(stderr, "Usage: render [-v] [-p] <file.rib>\n");
-        fprintf(stderr, "  -v, --verbose   Enable statistics output (level 1)\n");
+        fprintf(stderr, "  -v, --verbose   Enable statistics output (use twice for detailed stats)\n");
         fprintf(stderr, "  -p, --progress  Show progress bar during rendering\n");
         fprintf(stderr, "Parses a RIB file and renders it.\n");
         return 1;
