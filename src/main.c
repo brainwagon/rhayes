@@ -18,9 +18,12 @@ static void draw_floor_quad(float x, float z, float size, float y) {
 int main(int argc, char** argv) {
     // Parse command line arguments
     int verbose = 0;
+    int progress = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             verbose = 1;
+        } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--progress") == 0) {
+            progress = 1;
         }
     }
 
@@ -30,6 +33,12 @@ int main(int argc, char** argv) {
     if (verbose) {
         RtInt stats_on = 1;
         RiOption("statistics", "endofframe", &stats_on, RI_NULL);
+    }
+
+    // Enable progress bar if progress flag is set
+    if (progress) {
+        RtInt show = 1;
+        RiOption("progress", "show", &show, RI_NULL);
     }
 
     RiDisplay("output.png", "file", "rgb", RI_NULL);

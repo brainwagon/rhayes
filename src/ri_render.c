@@ -10,6 +10,36 @@
 
 static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropolygonList* out_mpolys, RhShadingMode mode);
 
+// --- Progress Bar Display ---
+
+static void ri_print_progress(int current, int total, double start_time) {
+    if (total <= 0) return;
+
+    // Calculate progress percentage
+    double pct = (double)current / total * 100.0;
+
+    // Get elapsed time
+    double elapsed = ri_get_time() - start_time;
+
+    // Estimate remaining time
+    double eta = (current > 0) ? (elapsed / current) * (total - current) : 0;
+
+    // Build progress bar (40 chars wide)
+    int bar_width = 40;
+    int filled = (int)(bar_width * current / total);
+
+    // Format: [####....] 25/100 (25.0%) 00:05 ETA 00:15
+    fprintf(stderr, "\r[");
+    for (int i = 0; i < bar_width; i++) {
+        fprintf(stderr, "%c", i < filled ? '#' : '.');
+    }
+    fprintf(stderr, "] %d/%d (%.1f%%) %02d:%02d ETA %02d:%02d",
+            current, total, pct,
+            (int)(elapsed / 60), (int)elapsed % 60,
+            (int)(eta / 60), (int)eta % 60);
+    fflush(stderr);
+}
+
 // --- Render Item Memory Management ---
 
 // Estimate memory size for a primitive (for tracking)
@@ -1286,6 +1316,13 @@ void RiWorldEnd(void) {
 
     double bucket_start = ri_get_time();
 
+    // Progress bar initialization
+    int total_buckets = ctx->num_buckets_x * ctx->num_buckets_y;
+    if (ctx->show_progress) {
+        ctx->render_start_time = bucket_start;
+        ri_print_progress(0, total_buckets, ctx->render_start_time);
+    }
+
     int ss_xres = ctx->xres * ctx->pixel_samples_x;
     int ss_yres = ctx->yres * ctx->pixel_samples_y;
 
@@ -1379,6 +1416,11 @@ void RiWorldEnd(void) {
                 ctx->stats.peak_mpolys_per_bucket = ctx->stats.mpolys_this_bucket;
             }
 
+            // Update progress bar
+            if (ctx->show_progress) {
+                ri_print_progress(ctx->stats.buckets_processed, total_buckets, ctx->render_start_time);
+            }
+
             // Destroy Hi-Z buffer for this bucket
             ri_hiz_destroy(ctx->bucket_hiz);
             ctx->bucket_hiz = NULL;
@@ -1390,6 +1432,11 @@ void RiWorldEnd(void) {
     }
     free(ctx->buckets);
     ctx->buckets = NULL;
+
+    // Finish progress bar
+    if (ctx->show_progress) {
+        fprintf(stderr, "\n");
+    }
 
     ri_mpoly_list_free(&ctx->bucket_mpolys);
 

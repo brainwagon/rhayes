@@ -348,6 +348,10 @@ typedef struct {
     // Hierarchical Z-buffer for occlusion culling (allocated per-bucket)
     RhHiZBuffer* bucket_hiz;
 
+    // Progress bar settings
+    bool show_progress;         // Enable progress bar output
+    double render_start_time;   // Start time for ETA calculation
+
     // Render item pool for memory reuse
     struct {
         RhRenderItem** free_list;       // Pool of freed items for reuse

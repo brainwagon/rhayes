@@ -34,7 +34,15 @@ void RiOptionV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
     RiContextData* ctx = ri_get_ctx();
     if (!ctx) return;
 
-    if (strcmp(name, "statistics") == 0) {
+    if (strcmp(name, "progress") == 0) {
+        for (int i = 0; i < count; i++) {
+            if (!tokens[i]) continue;
+            if (strcmp(tokens[i], "show") == 0) {
+                RtInt* val = (RtInt*)values[i];
+                ctx->show_progress = (*val != 0);
+            }
+        }
+    } else if (strcmp(name, "statistics") == 0) {
         for (int i = 0; i < count; i++) {
             if (!tokens[i]) continue;
             if (strcmp(tokens[i], "endofframe") == 0) {

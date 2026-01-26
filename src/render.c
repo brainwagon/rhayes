@@ -8,6 +8,8 @@
 
 // Global verbose flag (set via -v command line option)
 static int g_verbose = 0;
+// Global progress flag (set via -p command line option)
+static int g_progress = 0;
 
 // Wrapper functions that call the actual Ri* functions
 // These adapt the callback interface to the varargs Ri* API
@@ -17,6 +19,10 @@ static void render_Begin(RtToken name) {
     if (g_verbose) {
         RtInt level = 1;
         RiOption("statistics", "endofframe", &level, RI_NULL);
+    }
+    if (g_progress) {
+        RtInt show = 1;
+        RiOption("progress", "show", &show, RI_NULL);
     }
 }
 
@@ -289,14 +295,17 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             g_verbose = 1;
+        } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--progress") == 0) {
+            g_progress = 1;
         } else if (argv[i][0] != '-') {
             filename = argv[i];
         }
     }
 
     if (!filename) {
-        fprintf(stderr, "Usage: render [-v] <file.rib>\n");
-        fprintf(stderr, "  -v, --verbose  Enable statistics output (level 1)\n");
+        fprintf(stderr, "Usage: render [-v] [-p] <file.rib>\n");
+        fprintf(stderr, "  -v, --verbose   Enable statistics output (level 1)\n");
+        fprintf(stderr, "  -p, --progress  Show progress bar during rendering\n");
         fprintf(stderr, "Parses a RIB file and renders it.\n");
         return 1;
     }
