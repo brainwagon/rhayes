@@ -1075,7 +1075,11 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
     bool must_split_polygon = (p->type == RH_PRIM_POLYGON &&
                                p->data.polygon.count > 4);
 
-    bool need_more_splits = (depth < MIN_SPLIT_DEPTH) ||
+    // Flat polygons (triangles/quads) can skip MIN_SPLIT_DEPTH if already small
+    bool is_simple_polygon = (p->type == RH_PRIM_POLYGON &&
+                              p->data.polygon.count <= 4);
+
+    bool need_more_splits = (depth < MIN_SPLIT_DEPTH && !is_simple_polygon) ||
                             (screen_area >= area_threshold && depth < MAX_SPLIT_DEPTH);
 
     if (need_more_splits || must_split_polygon) {
