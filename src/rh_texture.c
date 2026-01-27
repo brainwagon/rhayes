@@ -245,6 +245,10 @@ RhColor rh_texture_sample_bilinear(const RhTexture* tex, unsigned int level,
     u = u - floorf(u);
     v = v - floorf(v);
 
+    /* Flip v for PNG origin convention (PNG has origin at top-left,
+       but texture coords assume origin at bottom-left) */
+    v = 1.0f - v;
+
     /* Convert to texel coordinates */
     float fx = u * (float)(mip->width - 1);
     float fy = v * (float)(mip->height - 1);

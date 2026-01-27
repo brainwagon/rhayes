@@ -17,6 +17,8 @@ typedef struct {
     RhVec3* normals;
     RhFloat* u_coords;  // Parametric u coordinates [0,1]
     RhFloat* v_coords;  // Parametric v coordinates [0,1]
+    RhFloat* s_coords;  // Texture s coordinates (for shading)
+    RhFloat* t_coords;  // Texture t coordinates (for shading)
 
     // User-defined primitive variables (primvars)
     RhPrimVar* primvars;  // Array of primitive variables
@@ -74,6 +76,7 @@ typedef struct {
 typedef struct {
     int count;
     RhVec3* vertices;
+    RhFloat* st;      // Texture coords, 2 floats per vertex (NULL if not provided)
 } RhPolygon;
 
 typedef struct {

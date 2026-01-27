@@ -64,6 +64,13 @@ void ri_add_geometry(RhPrimitive* p) {
         if (p->type == RH_PRIM_POLYGON) {
             item->prim.data.polygon.vertices = (RhVec3*)malloc(p->data.polygon.count * sizeof(RhVec3));
             memcpy(item->prim.data.polygon.vertices, p->data.polygon.vertices, p->data.polygon.count * sizeof(RhVec3));
+            // Deep copy st coords if present
+            if (p->data.polygon.st) {
+                item->prim.data.polygon.st = (RhFloat*)malloc(p->data.polygon.count * 2 * sizeof(RhFloat));
+                memcpy(item->prim.data.polygon.st, p->data.polygon.st, p->data.polygon.count * 2 * sizeof(RhFloat));
+            } else {
+                item->prim.data.polygon.st = NULL;
+            }
         }
         item->transform = ri_curr()->transform;
     } else {
@@ -545,6 +552,8 @@ void RiPolygonV(RtInt nvertices, RtToken* tokens, RtPointer* values, int count) 
 
     // Find the "P" parameter
     RhVec3* points = NULL;
+    RhFloat* st_data = NULL;
+
     for (int i = 0; i < count; i++) {
         if (tokens[i] && strcmp(tokens[i], "P") == 0) {
             RtFloat* p = (RtFloat*)values[i];
@@ -552,13 +561,20 @@ void RiPolygonV(RtInt nvertices, RtToken* tokens, RtPointer* values, int count) 
             for (int j = 0; j < nvertices; j++) {
                 points[j] = rh_vec3_create(p[j*3], p[j*3+1], p[j*3+2]);
             }
-            break;
+        } else if (tokens[i] && strcmp(tokens[i], "st") == 0) {
+            RtFloat* st = (RtFloat*)values[i];
+            st_data = (RhFloat*)malloc(nvertices * 2 * sizeof(RhFloat));
+            memcpy(st_data, st, nvertices * 2 * sizeof(RhFloat));
         }
     }
 
-    if (!points) return;
+    if (!points) {
+        free(st_data);
+        return;
+    }
 
     RhPrimitive prim = rh_prim_create_polygon(nvertices, points);
+    prim.data.polygon.st = st_data;  // Attach st coords (may be NULL)
     ri_parse_primvars(&prim, tokens, values, count);
     ri_add_geometry(&prim);
     rh_prim_free_data(&prim);

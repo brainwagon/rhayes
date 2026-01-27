@@ -111,11 +111,13 @@ RhMicroGrid* rh_grid_create(int width, int height) {
     g->normals = (RhVec3*)malloc(count * sizeof(RhVec3));
     g->u_coords = (RhFloat*)malloc(count * sizeof(RhFloat));
     g->v_coords = (RhFloat*)malloc(count * sizeof(RhFloat));
+    g->s_coords = (RhFloat*)malloc(count * sizeof(RhFloat));
+    g->t_coords = (RhFloat*)malloc(count * sizeof(RhFloat));
     g->primvars = NULL;
     g->num_primvars = 0;
 
     if (!g->positions || !g->colors || !g->opacities || !g->normals ||
-        !g->u_coords || !g->v_coords) {
+        !g->u_coords || !g->v_coords || !g->s_coords || !g->t_coords) {
         rh_grid_destroy(g);
         return NULL;
     }
@@ -130,6 +132,8 @@ void rh_grid_destroy(RhMicroGrid* g) {
         if (g->normals) free(g->normals);
         if (g->u_coords) free(g->u_coords);
         if (g->v_coords) free(g->v_coords);
+        if (g->s_coords) free(g->s_coords);
+        if (g->t_coords) free(g->t_coords);
         rh_primvar_array_free(g->primvars, g->num_primvars);
         free(g);
     }
@@ -235,6 +239,7 @@ RhPrimitive rh_prim_create_polygon(int count, const RhVec3* vertices) {
     if (p.data.polygon.vertices && vertices) {
         memcpy(p.data.polygon.vertices, vertices, count * sizeof(RhVec3));
     }
+    p.data.polygon.st = NULL;  // Texture coords set separately if provided
     p.u_min = 0.0f; p.u_max = 1.0f;
     p.v_min = 0.0f; p.v_max = 1.0f;
     p.primvars = NULL; p.num_primvars = 0;
@@ -268,6 +273,10 @@ void rh_prim_free_data(RhPrimitive* p) {
         if (p->data.polygon.vertices) {
             free(p->data.polygon.vertices);
             p->data.polygon.vertices = NULL;
+        }
+        if (p->data.polygon.st) {
+            free(p->data.polygon.st);
+            p->data.polygon.st = NULL;
         }
     }
     // Free any attached primvars
@@ -408,38 +417,66 @@ int rh_prim_split(const RhPrimitive* p, RhPrimitive* children) {
             // Vertices are at u=0,v=0 (0), u=1,v=0 (1), u=1,v=1 (2), u=0,v=1 (3)
             // If Triangle: v3==v2 or v3==v0? Usually 0,1,2.
             // Let's assume standard Quad order: 0(0,0), 1(1,0), 2(1,1), 3(0,1).
-            
+
             // Helper for linear interp
             #define LERP(a,b,t) rh_vec3_add(rh_vec3_mul(a, 1.0f-t), rh_vec3_mul(b, t))
-            
+            #define LERP_F(a,b,t) ((a)*(1.0f-(t)) + (b)*(t))
+
             RhVec3 v0 = v[0];
             RhVec3 v1 = v[1];
             RhVec3 v2 = (n>2) ? v[2] : v1;
             RhVec3 v3 = (n>3) ? v[3] : v0;
-            
+
+            // Get st coords if present
+            RhFloat* st = p->data.polygon.st;
+            RhFloat s0 = st ? st[0] : 0.0f, t0 = st ? st[1] : 0.0f;
+            RhFloat s1 = st ? st[2] : 1.0f, t1 = st ? st[3] : 0.0f;
+            RhFloat s2 = st ? ((n>2) ? st[4] : st[2]) : 1.0f;
+            RhFloat t2 = st ? ((n>2) ? st[5] : st[3]) : 1.0f;
+            RhFloat s3 = st ? ((n>3) ? st[6] : st[0]) : 0.0f;
+            RhFloat t3 = st ? ((n>3) ? st[7] : st[1]) : 1.0f;
+
             // We always split at parametric 0.5 relative to current?
             // Wait, rh_prim_split is usually parametric.
             // But for polygons, we usually physically split the geometry.
             // Since we re-create the polygon vertices, let's physically split.
-            
+
             // Split U direction (Left/Right)
              // Edge 0-1 split at 01. Edge 3-2 split at 32. Center 01-32 split at C.
              // But wait, are we splitting U or V?
              // Use parametric logic.
              RhFloat u_range = p->u_max - p->u_min;
              RhFloat v_range = p->v_max - p->v_min;
-             
+
              if (u_range >= v_range) {
                  // Split U
                  RhVec3 v01 = LERP(v0, v1, 0.5f);
                  RhVec3 v32 = LERP(v3, v2, 0.5f);
-                 
+
                  RhVec3 c1_verts[4] = {v0, v01, v32, v3};
                  RhVec3 c2_verts[4] = {v01, v1, v2, v32};
-                 
+
                  children[0] = rh_prim_create_polygon(4, c1_verts);
                  children[1] = rh_prim_create_polygon(4, c2_verts);
-                 
+
+                 // Interpolate st coords at midpoints
+                 if (st) {
+                     RhFloat s01 = LERP_F(s0, s1, 0.5f), t01 = LERP_F(t0, t1, 0.5f);
+                     RhFloat s32 = LERP_F(s3, s2, 0.5f), t32 = LERP_F(t3, t2, 0.5f);
+
+                     children[0].data.polygon.st = (RhFloat*)malloc(8 * sizeof(RhFloat));
+                     children[0].data.polygon.st[0] = s0;  children[0].data.polygon.st[1] = t0;
+                     children[0].data.polygon.st[2] = s01; children[0].data.polygon.st[3] = t01;
+                     children[0].data.polygon.st[4] = s32; children[0].data.polygon.st[5] = t32;
+                     children[0].data.polygon.st[6] = s3;  children[0].data.polygon.st[7] = t3;
+
+                     children[1].data.polygon.st = (RhFloat*)malloc(8 * sizeof(RhFloat));
+                     children[1].data.polygon.st[0] = s01; children[1].data.polygon.st[1] = t01;
+                     children[1].data.polygon.st[2] = s1;  children[1].data.polygon.st[3] = t1;
+                     children[1].data.polygon.st[4] = s2;  children[1].data.polygon.st[5] = t2;
+                     children[1].data.polygon.st[6] = s32; children[1].data.polygon.st[7] = t32;
+                 }
+
                  // Inherit UVs (if we tracked them per vert, but we track global)
                  children[0].u_min = p->u_min; children[0].u_max = (p->u_min + p->u_max)*0.5f;
                  children[1].u_min = (p->u_min + p->u_max)*0.5f; children[1].u_max = p->u_max;
@@ -449,13 +486,31 @@ int rh_prim_split(const RhPrimitive* p, RhPrimitive* children) {
                  // Split V
                  RhVec3 v03 = LERP(v0, v3, 0.5f);
                  RhVec3 v12 = LERP(v1, v2, 0.5f);
-                 
+
                  RhVec3 c1_verts[4] = {v0, v1, v12, v03};
                  RhVec3 c2_verts[4] = {v03, v12, v2, v3};
-                 
+
                  children[0] = rh_prim_create_polygon(4, c1_verts);
                  children[1] = rh_prim_create_polygon(4, c2_verts);
-                 
+
+                 // Interpolate st coords at midpoints
+                 if (st) {
+                     RhFloat s03 = LERP_F(s0, s3, 0.5f), t03 = LERP_F(t0, t3, 0.5f);
+                     RhFloat s12 = LERP_F(s1, s2, 0.5f), t12 = LERP_F(t1, t2, 0.5f);
+
+                     children[0].data.polygon.st = (RhFloat*)malloc(8 * sizeof(RhFloat));
+                     children[0].data.polygon.st[0] = s0;  children[0].data.polygon.st[1] = t0;
+                     children[0].data.polygon.st[2] = s1;  children[0].data.polygon.st[3] = t1;
+                     children[0].data.polygon.st[4] = s12; children[0].data.polygon.st[5] = t12;
+                     children[0].data.polygon.st[6] = s03; children[0].data.polygon.st[7] = t03;
+
+                     children[1].data.polygon.st = (RhFloat*)malloc(8 * sizeof(RhFloat));
+                     children[1].data.polygon.st[0] = s03; children[1].data.polygon.st[1] = t03;
+                     children[1].data.polygon.st[2] = s12; children[1].data.polygon.st[3] = t12;
+                     children[1].data.polygon.st[4] = s2;  children[1].data.polygon.st[5] = t2;
+                     children[1].data.polygon.st[6] = s3;  children[1].data.polygon.st[7] = t3;
+                 }
+
                  children[0].v_min = p->v_min; children[0].v_max = (p->v_min + p->v_max)*0.5f;
                  children[1].v_min = (p->v_min + p->v_max)*0.5f; children[1].v_max = p->v_max;
                  children[0].u_min = p->u_min; children[0].u_max = p->u_max;
@@ -819,10 +874,34 @@ RhVec3 rh_prim_eval_point(const RhPrimitive* p, RhFloat u, RhFloat v) {
     }
 }
 
+// Interpolate polygon st coordinates using bilinear interpolation
+static void interpolate_polygon_st(const RhPrimitive* p, RhFloat u, RhFloat v,
+                                   RhFloat* out_s, RhFloat* out_t) {
+    RhFloat u_local = (p->u_max == p->u_min) ? 0.0f : (u - p->u_min) / (p->u_max - p->u_min);
+    RhFloat v_local = (p->v_max == p->v_min) ? 0.0f : (v - p->v_min) / (p->v_max - p->v_min);
+
+    RhFloat* st = p->data.polygon.st;
+    int n = p->data.polygon.count;
+
+    RhFloat s0 = st[0], t0 = st[1];
+    RhFloat s1 = st[2], t1 = st[3];
+    RhFloat s2 = (n > 2) ? st[4] : st[2];
+    RhFloat t2 = (n > 2) ? st[5] : st[3];
+    RhFloat s3 = (n > 3) ? st[6] : st[0];
+    RhFloat t3 = (n > 3) ? st[7] : st[1];
+
+    // Bilinear interpolation (same pattern as vertex positions)
+    // P(u,v) = (1-u)(1-v)*P0 + u(1-v)*P1 + u*v*P2 + (1-u)*v*P3
+    *out_s = (1-u_local)*(1-v_local)*s0 + u_local*(1-v_local)*s1
+           + u_local*v_local*s2 + (1-u_local)*v_local*s3;
+    *out_t = (1-u_local)*(1-v_local)*t0 + u_local*(1-v_local)*t1
+           + u_local*v_local*t2 + (1-u_local)*v_local*t3;
+}
+
 void rh_prim_dice(const RhPrimitive* p, int u_res, int v_res, RhMicroGrid* grid) {
     // Fill the grid with vertices
     // We iterate u_res and v_res steps over the primitive's current u_min/max range
-    
+
     for (int j = 0; j < v_res; j++) {
         RhFloat v_step = (RhFloat)j / (RhFloat)(v_res - 1); // 0..1
         RhFloat v = rh_lerp(p->v_min, p->v_max, v_step);
@@ -961,6 +1040,15 @@ void rh_prim_dice(const RhPrimitive* p, int u_res, int v_res, RhMicroGrid* grid)
             grid->normals[idx] = norm;
             grid->u_coords[idx] = u;
             grid->v_coords[idx] = v;
+
+            // Fill texture coordinates (s,t)
+            if (p->type == RH_PRIM_POLYGON && p->data.polygon.st) {
+                interpolate_polygon_st(p, u, v, &grid->s_coords[idx], &grid->t_coords[idx]);
+            } else {
+                // Default: s,t = u,v (parametric)
+                grid->s_coords[idx] = u;
+                grid->t_coords[idx] = v;
+            }
 
             // Default color (white)
             grid->colors[idx] = (RhColor){1.0f, 1.0f, 1.0f};

@@ -86,6 +86,13 @@ RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* transfor
     if (p->type == RH_PRIM_POLYGON) {
         item->prim.data.polygon.vertices = (RhVec3*)malloc(p->data.polygon.count * sizeof(RhVec3));
         memcpy(item->prim.data.polygon.vertices, p->data.polygon.vertices, p->data.polygon.count * sizeof(RhVec3));
+        // Deep copy st coords if present
+        if (p->data.polygon.st) {
+            item->prim.data.polygon.st = (RhFloat*)malloc(p->data.polygon.count * 2 * sizeof(RhFloat));
+            memcpy(item->prim.data.polygon.st, p->data.polygon.st, p->data.polygon.count * 2 * sizeof(RhFloat));
+        } else {
+            item->prim.data.polygon.st = NULL;
+        }
     }
     // Deep copy primvars
     if (p->num_primvars > 0 && p->primvars) {
@@ -1152,40 +1159,41 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             int gx = i % gridSize;
             int gy = i / gridSize;
 
-            float screen_dx_u = 0.0f, screen_dy_u = 0.0f, tex_du = 0.0f, tex_dv_u = 0.0f;
+            // Compute filter width using texture coordinates (s,t), not parametric (u,v)
+            float screen_dx_u = 0.0f, screen_dy_u = 0.0f, tex_ds = 0.0f, tex_dt_u = 0.0f;
             if (gx < gridSize - 1) {
                 int i_right = i + 1;
                 screen_dx_u = screen_pos[i_right].x - screen_pos[i].x;
                 screen_dy_u = screen_pos[i_right].y - screen_pos[i].y;
-                tex_du = grid->u_coords[i_right] - grid->u_coords[i];
-                tex_dv_u = grid->v_coords[i_right] - grid->v_coords[i];
+                tex_ds = grid->s_coords[i_right] - grid->s_coords[i];
+                tex_dt_u = grid->t_coords[i_right] - grid->t_coords[i];
             } else if (gx > 0) {
                 int i_left = i - 1;
                 screen_dx_u = screen_pos[i].x - screen_pos[i_left].x;
                 screen_dy_u = screen_pos[i].y - screen_pos[i_left].y;
-                tex_du = grid->u_coords[i] - grid->u_coords[i_left];
-                tex_dv_u = grid->v_coords[i] - grid->v_coords[i_left];
+                tex_ds = grid->s_coords[i] - grid->s_coords[i_left];
+                tex_dt_u = grid->t_coords[i] - grid->t_coords[i_left];
             }
 
-            float screen_dx_v = 0.0f, screen_dy_v = 0.0f, tex_du_v = 0.0f, tex_dv = 0.0f;
+            float screen_dx_v = 0.0f, screen_dy_v = 0.0f, tex_ds_v = 0.0f, tex_dt = 0.0f;
             if (gy < gridSize - 1) {
                 int i_down = i + gridSize;
                 screen_dx_v = screen_pos[i_down].x - screen_pos[i].x;
                 screen_dy_v = screen_pos[i_down].y - screen_pos[i].y;
-                tex_du_v = grid->u_coords[i_down] - grid->u_coords[i];
-                tex_dv = grid->v_coords[i_down] - grid->v_coords[i];
+                tex_ds_v = grid->s_coords[i_down] - grid->s_coords[i];
+                tex_dt = grid->t_coords[i_down] - grid->t_coords[i];
             } else if (gy > 0) {
                 int i_up = i - gridSize;
                 screen_dx_v = screen_pos[i].x - screen_pos[i_up].x;
                 screen_dy_v = screen_pos[i].y - screen_pos[i_up].y;
-                tex_du_v = grid->u_coords[i] - grid->u_coords[i_up];
-                tex_dv = grid->v_coords[i] - grid->v_coords[i_up];
+                tex_ds_v = grid->s_coords[i] - grid->s_coords[i_up];
+                tex_dt = grid->t_coords[i] - grid->t_coords[i_up];
             }
 
             float screen_dist_u = sqrtf(screen_dx_u * screen_dx_u + screen_dy_u * screen_dy_u);
             float screen_dist_v = sqrtf(screen_dx_v * screen_dx_v + screen_dy_v * screen_dy_v);
-            float tex_dist_u = sqrtf(tex_du * tex_du + tex_dv_u * tex_dv_u);
-            float tex_dist_v = sqrtf(tex_du_v * tex_du_v + tex_dv * tex_dv);
+            float tex_dist_u = sqrtf(tex_ds * tex_ds + tex_dt_u * tex_dt_u);
+            float tex_dist_v = sqrtf(tex_ds_v * tex_ds_v + tex_dt * tex_dt);
 
             float filter_u = 0.0f, filter_v = 0.0f;
 
@@ -1220,8 +1228,9 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             shctx.primvars = item->prim.primvars;
             shctx.num_primvars = item->prim.num_primvars;
 
-            shctx.u = grid->u_coords[i];
-            shctx.v = grid->v_coords[i];
+            // Use texture coordinates (s,t) for shading, not parametric (u,v)
+            shctx.u = grid->s_coords[i];
+            shctx.v = grid->t_coords[i];
 
             shctx.du = filter_width;
             shctx.dv = filter_width;
