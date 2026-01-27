@@ -431,27 +431,12 @@ static void ri_hiz_update(RhHiZBuffer* hiz, int x, int y, float z) {
     int lx = x - hiz->base_offset_x;
     int ly = y - hiz->base_offset_y;
 
-    // Update level 0 (full resolution)
+    // Update level 0 (full resolution) - stores min (closest) z at each pixel
     if (lx < 0 || lx >= hiz->width[0] || ly < 0 || ly >= hiz->height[0]) return;
 
     int idx = ly * hiz->width[0] + lx;
     if (z < hiz->levels[0][idx]) {
         hiz->levels[0][idx] = z;
-
-        // Propagate minimum to coarser levels
-        for (int level = 1; level < hiz->num_levels; level++) {
-            lx /= 2;
-            ly /= 2;
-            if (lx >= hiz->width[level]) lx = hiz->width[level] - 1;
-            if (ly >= hiz->height[level]) ly = hiz->height[level] - 1;
-
-            idx = ly * hiz->width[level] + lx;
-            if (z < hiz->levels[level][idx]) {
-                hiz->levels[level][idx] = z;
-            } else {
-                break;  // No need to propagate further if not smaller
-            }
-        }
     }
 }
 
@@ -469,7 +454,7 @@ static bool ri_hiz_test_occluded(RhHiZBuffer* hiz, int min_x, int min_y,
     int lmax_x = max_x - hiz->base_offset_x;
     int lmax_y = max_y - hiz->base_offset_y;
 
-    // Clamp to bucket bounds
+    // Clamp to bucket bounds (level 0 = raw Z-buffer)
     if (lmin_x < 0) lmin_x = 0;
     if (lmin_y < 0) lmin_y = 0;
     if (lmax_x >= hiz->width[0]) lmax_x = hiz->width[0] - 1;
@@ -478,55 +463,26 @@ static bool ri_hiz_test_occluded(RhHiZBuffer* hiz, int min_x, int min_y,
     // If region is entirely outside bucket, it's not occluded by THIS bucket
     if (lmin_x > lmax_x || lmin_y > lmax_y) return false;
 
-    // Find the coarsest level where we can do a single lookup
-    // that covers the entire region
-    int level = 0;
-
-    while (level < hiz->num_levels - 1) {
-        // Check if region fits in a single cell at next level
-        int scale = 1 << (level + 1);
-        int cell_min_x = lmin_x / scale;
-        int cell_max_x = lmax_x / scale;
-        int cell_min_y = lmin_y / scale;
-        int cell_max_y = lmax_y / scale;
-
-        if (cell_min_x == cell_max_x && cell_min_y == cell_max_y) {
-            level++;
-        } else {
-            break;
-        }
-    }
-
-    // At this level, check all cells that cover our region
-    int scale = 1 << level;
-    int cell_min_x = lmin_x / scale;
-    int cell_max_x = lmax_x / scale;
-    int cell_min_y = lmin_y / scale;
-    int cell_max_y = lmax_y / scale;
-
-    // Clamp to level bounds
-    if (cell_min_x < 0) cell_min_x = 0;
-    if (cell_min_y < 0) cell_min_y = 0;
-    if (cell_max_x >= hiz->width[level]) cell_max_x = hiz->width[level] - 1;
-    if (cell_max_y >= hiz->height[level]) cell_max_y = hiz->height[level] - 1;
-
-    // Hi-Z stores the minimum (closest) z at each cell.
-    // For a grid to be fully occluded, ALL pixels must be behind existing geometry.
-    // So we need: grid_min_z > hiz_z for ALL cells in the coverage.
-    // Find the maximum Hi-Z value in the region (the farthest of the closest points).
+    // Simple approach: always use level 0 (raw Z values)
+    // Level 0 stores min (closest) z at each pixel.
+    // For a grid to be fully occluded, its min_depth must be > ALL z values in its bbox.
+    // So we find the maximum z in the region - if min_depth > max_z, grid is occluded.
     float max_hiz_depth = -1e30f;
-    for (int cy = cell_min_y; cy <= cell_max_y; cy++) {
-        for (int cx = cell_min_x; cx <= cell_max_x; cx++) {
-            int idx = cy * hiz->width[level] + cx;
-            float val = hiz->levels[level][idx];
+    for (int cy = lmin_y; cy <= lmax_y; cy++) {
+        for (int cx = lmin_x; cx <= lmax_x; cx++) {
+            int idx = cy * hiz->width[0] + cx;
+            float val = hiz->levels[0][idx];
             if (val > max_hiz_depth) {
                 max_hiz_depth = val;
             }
         }
     }
 
-    // Grid is occluded if its closest point is farther than ALL Hi-Z values
-    return min_depth > max_hiz_depth;
+    // Grid is occluded if its closest point is farther than ALL Hi-Z values.
+    // Use an epsilon to avoid culling coplanar surfaces due to floating point precision.
+    // The epsilon is relative to the depth range to handle different scene scales.
+    float epsilon = 0.01f;  // 1% tolerance
+    return min_depth > max_hiz_depth + epsilon;
 }
 
 // --- Front-to-Back Sorting Comparison ---
@@ -1003,8 +959,8 @@ static float ri_compute_screen_area_motion(const RhPrimitive* p, const RhMat4* m
             RhVec3 pos_obj = rh_prim_eval_point(p, u, v);
 
             RhVec3 p_ndc = rh_mat4_mul_point(*mvp, pos_obj);
-            float rx = (p_ndc.x + 1.0f) * 0.5f * ctx->ss_xres;
-            float ry = (1.0f - (p_ndc.y + 1.0f) * 0.5f) * ctx->ss_yres;
+            float rx = (p_ndc.x + 1.0f) * 0.5f * ctx->xres;
+            float ry = (1.0f - (p_ndc.y + 1.0f) * 0.5f) * ctx->yres;
 
             if (rx < min_x) min_x = rx;
             if (rx > max_x) max_x = rx;
@@ -1013,8 +969,8 @@ static float ri_compute_screen_area_motion(const RhPrimitive* p, const RhMat4* m
 
             if (mvp_t1) {
                 RhVec3 p_ndc_t1 = rh_mat4_mul_point(*mvp_t1, pos_obj);
-                float rx_t1 = (p_ndc_t1.x + 1.0f) * 0.5f * ctx->ss_xres;
-                float ry_t1 = (1.0f - (p_ndc_t1.y + 1.0f) * 0.5f) * ctx->ss_yres;
+                float rx_t1 = (p_ndc_t1.x + 1.0f) * 0.5f * ctx->xres;
+                float ry_t1 = (1.0f - (p_ndc_t1.y + 1.0f) * 0.5f) * ctx->yres;
 
                 if (rx_t1 < min_x) min_x = rx_t1;
                 if (rx_t1 > max_x) max_x = rx_t1;
@@ -1068,9 +1024,8 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
 
     float screen_area = ri_compute_screen_area(p, &mvp);
 
-    float ss_factor = (float)(ctx->pixel_samples_x * ctx->pixel_samples_y);
     float shading_rate_sq = item->shading_rate * item->shading_rate;
-    float area_threshold = MAX_GRID_AREA * ss_factor * shading_rate_sq;
+    float area_threshold = MAX_GRID_AREA * shading_rate_sq;
 
     bool must_split_polygon = (p->type == RH_PRIM_POLYGON &&
                                p->data.polygon.count > 4);
