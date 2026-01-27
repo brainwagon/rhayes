@@ -251,7 +251,7 @@ void RiProjectionV(RtToken name, RtToken* tokens, RtPointer* values, int count) 
         float aspect = (float)ctx->xres / (float)ctx->yres;
         float f = 1.0f / tanf(fov_rad / 2.0f);
         float zNear = 0.1f;
-        float zFar = 100.0f;
+        float zFar = 1e30f;
 
         ctx->projection = rh_mat4_identity();
         ctx->projection.m[0][0] = f / aspect;

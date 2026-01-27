@@ -202,8 +202,8 @@ static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, con
     corners[6] = rh_vec3_create(obj_bounds.min.x, obj_bounds.max.y, obj_bounds.max.z);
     corners[7] = rh_vec3_create(obj_bounds.max.x, obj_bounds.max.y, obj_bounds.max.z);
 
-    float min_x = (float)ctx->ss_xres, max_x = 0;
-    float min_y = (float)ctx->ss_yres, max_y = 0;
+    float min_x = 1e30f, max_x = -1e30f;
+    float min_y = 1e30f, max_y = -1e30f;
     float min_depth = 1e30f, max_depth = -1e30f;
 
     // Project bounding box corners at t0
@@ -246,18 +246,19 @@ static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, con
     int b_min_y = (int)floorf(min_y / ctx->bucket_size);
     int b_max_y = (int)floorf(max_y / ctx->bucket_size);
 
-    // Clamp to bucket grid
-    if (b_min_x < 0) b_min_x = 0;
-    if (b_max_x >= ctx->num_buckets_x) b_max_x = ctx->num_buckets_x - 1;
-    if (b_min_y < 0) b_min_y = 0;
-    if (b_max_y >= ctx->num_buckets_y) b_max_y = ctx->num_buckets_y - 1;
-
-    // Early-out for completely off-screen items
-    if (b_min_x > b_max_x || b_min_y > b_max_y) {
+    // Early-out for completely off-screen items (check before clamping)
+    if (b_max_x < 0 || b_max_y < 0 ||
+        b_min_x >= ctx->num_buckets_x || b_min_y >= ctx->num_buckets_y) {
         ctx->all_items[item->all_items_idx] = NULL;  // Mark as freed
         ri_render_item_destroy(item);
         return;
     }
+
+    // Clamp to bucket grid for partially visible items
+    if (b_min_x < 0) b_min_x = 0;
+    if (b_max_x >= ctx->num_buckets_x) b_max_x = ctx->num_buckets_x - 1;
+    if (b_min_y < 0) b_min_y = 0;
+    if (b_max_y >= ctx->num_buckets_y) b_max_y = ctx->num_buckets_y - 1;
 
     // Compute last bucket index (scanline order: y * num_buckets_x + x)
     item->last_bucket_idx = b_max_y * ctx->num_buckets_x + b_max_x;

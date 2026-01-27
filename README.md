@@ -83,6 +83,11 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
     - Recursive splitting and dicing of primitives.
     - Shading in object/eye space before visibility testing.
     - Z-buffer based rasterization with sub-pixel sampling.
+- **Large Scene Optimization**:
+    - Backface culling at grid and micropolygon levels (typically 80-95% reduction).
+    - Memory tracking and configurable limits.
+    - Render item pooling for memory reuse.
+    - A-buffer infrastructure for proper transparency compositing.
 - **RenderMan-like API**: Implementation of a subset of the Ri specification.
 - **Geometric Primitives**:
     - Quadrics: Sphere, Cylinder, Cone, Disk, Torus, Paraboloid, Hyperboloid.
@@ -199,6 +204,39 @@ make profile
 gprof bin/render gmon.out
 ```
 
+### Large Scene Rendering
+
+The renderer includes several optimizations for handling scenes with millions of primitives:
+
+**Backface Culling** (Planned)
+- Currently disabled pending "Sides" attribute support
+- Infrastructure in place for grid-level and micropolygon-level culling
+- Challenge: RenderMan polygon winding order determines normal direction, but many scenes have "wrong" normals for their intended viewing direction (e.g., floor polygons with downward-pointing normals)
+- Requires explicit one-sided/two-sided attribute to work correctly
+- When enabled for closed surfaces (spheres, etc.), expected to eliminate 80-95% of back-facing micropolygons
+
+**Memory Management**
+Configure memory options via RIB:
+```rib
+Option "limits" "memory" [1024]      # Memory budget in MB (0 = unlimited)
+Option "limits" "bucketsize" [32]    # Bucket size in pixels (8-256)
+Option "limits" "othresh" [0.999]    # Opacity threshold for visibility culling
+```
+
+**Memory Tracking**
+Enable detailed statistics to see memory usage:
+```rib
+Option "statistics" "endofframe" [2]  # 0=off, 1=basic, 2=detailed
+```
+
+Example output:
+```
+Memory usage:
+  Peak:          11.48 MB
+  Pool hits:     700
+  Pool misses:   9300
+```
+
 ### Motion Blur Optimizations
 The motion blur implementation includes several optimizations:
 - **Jittered path bypass**: Motion cache precomputation is skipped when jitter is enabled (the cache would be unused)
@@ -221,15 +259,22 @@ Motion blur with jittered sampling remains computationally expensive for fast-mo
 - **Adaptive shading rate**: Use coarser micropolygon grids for fast-moving objects (they're blurry anyway)
 - **Deferred visibility**: Compute mpoly-to-pixel mapping first, then shade only visible contributions
 
+## Recent Bug Fixes
+
+- **Bucket Assignment Bug**: Fixed resolution-dependent rendering failures where primitives would render at some resolutions but not others. The screen-space bounding box calculation was incorrectly initialized, causing off-screen detection to depend on image dimensions.
+- **Far Clipping Plane**: Changed default far clipping plane from 100 to effectively infinite (1e30), allowing scenes with distant geometry to render correctly.
+- **STL Converter Camera Order**: Fixed `stl2rib.py` camera transform order. RenderMan transforms accumulate via post-multiplication, so for an isometric view the correct order is: Rotate (aim), Rotate (tilt), Translate (back away).
+
 ## Work in Progress
 
 Current development focus:
+- **A-Buffer Integration**: Infrastructure for per-subpixel sample lists is implemented (RhSample, RhSubpixelList, RhBucketSamples). Pending: integration into rasterization pipeline for proper transparency compositing and visibility culling.
+- **Two-Sided Primitives**: Add "Sides" attribute to control one-sided vs two-sided surface rendering. Required for correct backface culling.
 - **Additional Shaders**: Extend texture support to `shinymetal` and other shaders.
 - **Trilinear Filtering**: Add interpolation between mip levels for smoother LOD transitions.
 - **Displacement Mapping**: Support for procedural and texture-based surface displacement.
 - **Deformation Motion Blur**: Extend motion blur to support deforming geometry (not just transforms).
 - **Depth of Field**: Implement lens sampling for depth of field effects.
-- **Transparency & Compositing**: Alpha-based visibility with proper depth sorting.
 
 ## License
 MIT License.

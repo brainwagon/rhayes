@@ -105,6 +105,13 @@ def write_rib(filename, triangles, scale=1.0, center=False):
         # Camera setup - narrower FOV for more isometric feel
         f.write("Projection \"perspective\" \"fov\" [30]\n\n")
 
+        # Camera placement (before WorldBegin): look along (1,1,1) diagonal
+        # Order matters: first rotate to aim camera, then translate back
+        f.write("# Camera: isometric-style diagonal view\n")
+        f.write("Rotate 45 0 1 0\n")   # First: turn 45° around Y for corner view
+        f.write("Rotate 35 1 0 0\n")   # Second: tilt down ~35° (arctan(1/sqrt(2)))
+        f.write(f"Translate 0 0 {cam_distance:.4f}\n\n")  # Third: back away from model
+
         f.write("WorldBegin\n\n")
 
         # Lighting
@@ -122,18 +129,12 @@ def write_rib(filename, triangles, scale=1.0, center=False):
         f.write("  Color [0.7 0.7 0.8]\n")
         f.write("  Sides 1\n\n")
 
-        # Transform to position model with isometric-style diagonal view
-        # Transforms apply in reverse order: translate back, then rotate to diagonal
-        f.write("  # Position model in front of camera along (1,1,1) diagonal\n")
-        f.write(f"  Translate 0 0 {cam_distance:.4f}\n")
-        f.write("  Rotate 35 1 0 0\n")  # Tilt down ~35° (arctan(1/sqrt(2)))
-        f.write("  Rotate 45 0 1 0\n")  # Turn 45° around Y for corner view
+        # Model transforms: scale first, then center (need scaled center since scale applied first)
+        if scale != 1.0:
+            f.write(f"  Scale {scale} {scale} {scale}\n")
 
         if center:
             f.write(f"  Translate {-center_x * scale:.6f} {-center_y * scale:.6f} {-center_z * scale:.6f}\n")
-
-        if scale != 1.0:
-            f.write(f"  Scale {scale} {scale} {scale}\n")
 
         f.write("\n")
 
