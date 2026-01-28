@@ -399,6 +399,9 @@ typedef struct {
     bool show_progress;         // Enable progress bar output
     double render_start_time;   // Start time for ETA calculation
 
+    // Near plane clipping
+    float near_clip;            // Near clipping plane distance (default 0.1)
+
     // Render item pool for memory reuse
     struct {
         RhRenderItem** free_list;       // Pool of freed items for reuse

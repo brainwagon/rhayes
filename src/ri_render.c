@@ -643,6 +643,11 @@ static void ri_grid_to_mpolys_motion(const RhMicroGrid* grid,
             RhVec3 v2 = screen_pos[i11];
             RhVec3 v3 = screen_pos[i01];
 
+            // Skip micropolygon if any vertex is clipped (behind near plane)
+            if (v0.x < -1e8f || v1.x < -1e8f || v2.x < -1e8f || v3.x < -1e8f) {
+                continue;
+            }
+
             (void)cam_normals;
 
             RhMicropolygon mpoly;
@@ -1103,19 +1108,45 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             cam_positions[i] = rh_mat4_mul_point(view, pos_world);
             cam_normals[i] = rh_vec3_normalize(rh_mat4_mul_dir(view, norm_world));
 
-            RhVec3 pos_ndc = rh_mat4_mul_point(proj, cam_positions[i]);
-            float rx = (pos_ndc.x + 1.0f) * 0.5f * ctx->ss_xres;
-            float ry = (1.0f - (pos_ndc.y + 1.0f) * 0.5f) * ctx->ss_yres;
-            screen_pos[i] = rh_vec3_create(rx, ry, pos_ndc.z);
+            // Near plane clipping: mark vertices behind near plane with sentinel values
+            if (cam_positions[i].z > -ctx->near_clip) {
+                // Vertex is behind near plane - mark as clipped
+                screen_pos[i] = rh_vec3_create(-1e9f, -1e9f, 1e30f);
+            } else {
+                RhVec3 pos_ndc = rh_mat4_mul_point(proj, cam_positions[i]);
+                float rx = (pos_ndc.x + 1.0f) * 0.5f * ctx->ss_xres;
+                float ry = (1.0f - (pos_ndc.y + 1.0f) * 0.5f) * ctx->ss_yres;
+                screen_pos[i] = rh_vec3_create(rx, ry, pos_ndc.z);
+            }
 
             if (has_motion) {
                 RhVec3 pos_world_t1 = rh_mat4_mul_point(model_t1, pos_obj);
                 RhVec3 pos_cam_t1 = rh_mat4_mul_point(view, pos_world_t1);
-                RhVec3 pos_ndc_t1 = rh_mat4_mul_point(proj, pos_cam_t1);
-                float rx_t1 = (pos_ndc_t1.x + 1.0f) * 0.5f * ctx->ss_xres;
-                float ry_t1 = (1.0f - (pos_ndc_t1.y + 1.0f) * 0.5f) * ctx->ss_yres;
-                screen_pos_t1[i] = rh_vec3_create(rx_t1, ry_t1, pos_ndc_t1.z);
+
+                // Near plane clipping for t1 positions
+                if (pos_cam_t1.z > -ctx->near_clip) {
+                    // Vertex is behind near plane at t1 - mark as clipped
+                    screen_pos_t1[i] = rh_vec3_create(-1e9f, -1e9f, 1e30f);
+                } else {
+                    RhVec3 pos_ndc_t1 = rh_mat4_mul_point(proj, pos_cam_t1);
+                    float rx_t1 = (pos_ndc_t1.x + 1.0f) * 0.5f * ctx->ss_xres;
+                    float ry_t1 = (1.0f - (pos_ndc_t1.y + 1.0f) * 0.5f) * ctx->ss_yres;
+                    screen_pos_t1[i] = rh_vec3_create(rx_t1, ry_t1, pos_ndc_t1.z);
+                }
             }
+        }
+
+        // Near plane culling: skip grid if ALL vertices are behind near plane
+        bool all_behind = true;
+        for (int i = 0; i < gridSize * gridSize; i++) {
+            if (cam_positions[i].z <= -ctx->near_clip) {
+                all_behind = false;
+                break;
+            }
+        }
+        if (all_behind) {
+            rh_grid_destroy(grid);
+            return;
         }
 
         // Compute grid screen bounds and min depth for Hi-Z culling

@@ -253,6 +253,9 @@ void RiProjectionV(RtToken name, RtToken* tokens, RtPointer* values, int count) 
         float zNear = 0.1f;
         float zFar = 1e30f;
 
+        // Store near clip distance for culling
+        ctx->near_clip = zNear;
+
         ctx->projection = rh_mat4_identity();
         ctx->projection.m[0][0] = f / aspect;
         ctx->projection.m[1][1] = f;
