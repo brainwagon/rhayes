@@ -62,6 +62,20 @@ RenderMan API calls → Graphics State Stack → Scene Collection (WorldBegin/En
 - **Polygon normals**: Computed via finite differences; vertex winding order affects normal direction
 - **Sphere pole normals**: Finite difference method degenerates at poles; fallback to analytic normal `N = normalize(P)`
 
+## Coordinate System
+
+RenderMan uses a **left-handed** coordinate system:
+- **+X** points right
+- **+Y** points up
+- **+Z** points INTO the screen (toward objects, away from viewer)
+- Camera at origin looks down the **+Z axis**
+- Objects in front of the camera have **positive Z** in camera space
+- Default orientation is left-handed (`RiOrientation "lh"`)
+
+When setting up camera transforms before `WorldBegin`:
+- `RiTranslate(0, y, -distance)` positions camera at negative Z looking toward positive Z
+- Objects at/near the origin will be visible
+
 ## Key Reference Documents
 
 - `PARTI.md` - RenderMan Interface Specification v3.1 (reference for API behavior)

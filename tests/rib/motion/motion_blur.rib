@@ -8,7 +8,7 @@ Hider "hidden" "jitter" [1]
 Shutter 0 1.0
 PixelSamples 4 4
 
-Translate 0 0 5
+Translate 0 0 -5
 WorldBegin
 
 # Ambient light

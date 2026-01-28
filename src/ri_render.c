@@ -1109,7 +1109,8 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             cam_normals[i] = rh_vec3_normalize(rh_mat4_mul_dir(view, norm_world));
 
             // Near plane clipping: mark vertices behind near plane with sentinel values
-            if (cam_positions[i].z > -ctx->near_clip) {
+            // Left-handed: camera looks down +Z, objects in front have z >= near_clip
+            if (cam_positions[i].z < ctx->near_clip) {
                 // Vertex is behind near plane - mark as clipped
                 screen_pos[i] = rh_vec3_create(-1e9f, -1e9f, 1e30f);
             } else {
@@ -1124,7 +1125,8 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
                 RhVec3 pos_cam_t1 = rh_mat4_mul_point(view, pos_world_t1);
 
                 // Near plane clipping for t1 positions
-                if (pos_cam_t1.z > -ctx->near_clip) {
+                // Left-handed: camera looks down +Z, objects in front have z >= near_clip
+                if (pos_cam_t1.z < ctx->near_clip) {
                     // Vertex is behind near plane at t1 - mark as clipped
                     screen_pos_t1[i] = rh_vec3_create(-1e9f, -1e9f, 1e30f);
                 } else {
@@ -1137,9 +1139,10 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
         }
 
         // Near plane culling: skip grid if ALL vertices are behind near plane
+        // Left-handed: camera looks down +Z, in front when z >= near_clip
         bool all_behind = true;
         for (int i = 0; i < gridSize * gridSize; i++) {
-            if (cam_positions[i].z <= -ctx->near_clip) {
+            if (cam_positions[i].z >= ctx->near_clip) {
                 all_behind = false;
                 break;
             }

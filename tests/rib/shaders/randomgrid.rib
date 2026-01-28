@@ -4,7 +4,7 @@ Format 400 400 1
 Display "randomgrid.png" "file" "rgba"
 Projection "perspective" "fov" 45
 TransformBegin
-    Translate 0 0 6
+    Translate 0 0 -6
     WorldBegin
         # No lights needed - randomgrid ignores lighting
         Surface "randomgrid"
@@ -34,7 +34,7 @@ TransformBegin
 
         # Teapot in center
         AttributeBegin
-            Translate 0 0 0
+            Translate 0 0 -0
             Scale 0.3 0.3 0.3
             Rotate -90 1 0 0
             Geometry "teapot"

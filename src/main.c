@@ -48,9 +48,10 @@ int main(int argc, char** argv) {
     RiProjection("perspective", RI_NULL);
 
     // Setup Camera - looking at teapot from above and front
+    // Left-handed: camera at negative Z looking toward positive Z
     RiTransformBegin();
-        RiTranslate(0.0f, 2.0f, 8.0f);
-        RiRotate(-15.0f, 1.0f, 0.0f, 0.0f);  // Tilt down slightly
+        RiTranslate(0.0f, 3.0f, -10.0f);
+        RiRotate(20.0f, 1.0f, 0.0f, 0.0f);  // Tilt down to see floor
 
         RiWorldBegin();
 

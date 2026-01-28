@@ -5,7 +5,7 @@ Display "pointlight.png" "file" "rgba"
 Projection "perspective" "fov" 45
 TransformBegin
     Rotate -20 1 0 0
-    Translate 0 0 4
+    Translate 0 0 -4
     WorldBegin
         # Point light positioned above center to show radial falloff
         LightSource "pointlight" "intensity" 1.2 "from" [0 1.5 0]

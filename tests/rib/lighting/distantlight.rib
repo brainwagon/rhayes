@@ -5,7 +5,7 @@ Display "distantlight.png" "file" "rgba"
 Projection "perspective" "fov" 45
 TransformBegin
     Rotate -20 1 0 0
-    Translate 0 0 4
+    Translate 0 0 -4
     WorldBegin
         LightSource "distantlight" "intensity" 1 "from" [1 1 -1]
         Surface "plastic"

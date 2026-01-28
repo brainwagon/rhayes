@@ -5,7 +5,7 @@ Display "ambientlight.png" "file" "rgba"
 Projection "perspective" "fov" 45
 TransformBegin
     Rotate -20 1 0 0
-    Translate 0 0 4
+    Translate 0 0 -4
     WorldBegin
         # Ambient light provides uniform illumination with no direction
         LightSource "ambientlight" "intensity" 0.8

@@ -259,9 +259,10 @@ void RiProjectionV(RtToken name, RtToken* tokens, RtPointer* values, int count) 
         ctx->projection = rh_mat4_identity();
         ctx->projection.m[0][0] = f / aspect;
         ctx->projection.m[1][1] = f;
-        ctx->projection.m[2][2] = (zFar + zNear) / (zNear - zFar);
-        ctx->projection.m[2][3] = (2 * zFar * zNear) / (zNear - zFar);
-        ctx->projection.m[3][2] = -1.0f;
+        // RenderMan left-handed: camera looks down +Z, objects in front have positive Z
+        ctx->projection.m[2][2] = (zFar + zNear) / (zFar - zNear);
+        ctx->projection.m[2][3] = -(2 * zFar * zNear) / (zFar - zNear);
+        ctx->projection.m[3][2] = 1.0f;
         ctx->projection.m[3][3] = 0.0f;
     } else if (strcmp(name, "orthographic") == 0) {
         // Identity / Scale

@@ -6,7 +6,7 @@ Projection "perspective" "fov" 45
 # No Shutter means shutter_open = shutter_close = 0 (no blur)
 PixelSamples 4 4
 
-Translate 0 0 5
+Translate 0 0 -5
 WorldBegin
 
 # Ambient light
@@ -24,7 +24,7 @@ Polygon "P" [-5 -1 -5  5 -1 -5  5 -1 5  -5 -1 5]
 Color [1 0 0]
 Surface "plastic"
 AttributeBegin
-  Translate 0 0 0
+  Translate 0 0 -0
   Sphere 0.5 -0.5 0.5 360
 AttributeEnd
 

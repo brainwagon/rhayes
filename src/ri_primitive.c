@@ -249,12 +249,12 @@ static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, con
     item->max_depth = max_depth;
 
     // Near plane culling: check if ALL corners are behind near plane
-    // Transform to camera space and test Z > -near_clip
+    // Left-handed: camera looks down +Z, in front when z >= near_clip
     RhMat4 mv = rh_mat4_mul(ctx->view_matrix, item->transform);
     bool all_behind = true;
     for (int i = 0; i < 8; i++) {
         RhVec3 cam_corner = rh_mat4_mul_point(mv, corners[i]);
-        if (cam_corner.z <= -ctx->near_clip) {
+        if (cam_corner.z >= ctx->near_clip) {
             all_behind = false;
             break;
         }
