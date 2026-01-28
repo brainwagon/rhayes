@@ -11,6 +11,10 @@ typedef struct RiCallbacks {
     void (*Begin)(RtToken name);
     void (*End)(void);
 
+    // Frame structure
+    void (*FrameBegin)(RtInt frame);
+    void (*FrameEnd)(void);
+
     // Variable declarations
     void (*Declare)(const char* name, const char* declaration);
 

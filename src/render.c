@@ -30,6 +30,14 @@ static void render_End(void) {
     RiEnd();
 }
 
+static void render_FrameBegin(RtInt frame) {
+    RiFrameBegin(frame);
+}
+
+static void render_FrameEnd(void) {
+    RiFrameEnd();
+}
+
 static void render_Declare(const char* name, const char* declaration) {
     RiDeclare(name, declaration);
 }
@@ -255,6 +263,8 @@ static void render_ObjectInstance(RtInt handle) {
 RiCallbacks ri_render_callbacks = {
     .Begin = render_Begin,
     .End = render_End,
+    .FrameBegin = render_FrameBegin,
+    .FrameEnd = render_FrameEnd,
     .Declare = render_Declare,
     .Format = render_Format,
     .Display = render_Display,

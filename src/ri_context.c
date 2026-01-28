@@ -162,3 +162,82 @@ RtPointer RiGetContext(void) {
 void RiContext(RtPointer ctx) {
     g_ctx = (RiContextData*)ctx;
 }
+
+// --- Frame Structure ---
+
+void RiFrameBegin(RtInt frame) {
+    if (!g_ctx) return;
+
+    g_ctx->frame_active = true;
+    g_ctx->frame_number = frame;
+
+    // Save all options
+    g_ctx->saved_options.xres = g_ctx->xres;
+    g_ctx->saved_options.yres = g_ctx->yres;
+    strcpy(g_ctx->saved_options.display_name, g_ctx->display_name);
+    g_ctx->saved_options.display_channels = g_ctx->display_channels;
+    g_ctx->saved_options.projection = g_ctx->projection;
+    g_ctx->saved_options.pixel_samples_x = g_ctx->pixel_samples_x;
+    g_ctx->saved_options.pixel_samples_y = g_ctx->pixel_samples_y;
+    g_ctx->saved_options.pixel_filter = g_ctx->pixel_filter;
+    g_ctx->saved_options.filter_width_x = g_ctx->filter_width_x;
+    g_ctx->saved_options.filter_width_y = g_ctx->filter_width_y;
+    g_ctx->saved_options.dof_fstop = g_ctx->dof_fstop;
+    g_ctx->saved_options.dof_focallength = g_ctx->dof_focallength;
+    g_ctx->saved_options.dof_focaldistance = g_ctx->dof_focaldistance;
+    g_ctx->saved_options.shutter_open = g_ctx->shutter_open;
+    g_ctx->saved_options.shutter_close = g_ctx->shutter_close;
+    g_ctx->saved_options.hider_options.jitter = g_ctx->hider_options.jitter;
+    g_ctx->saved_options.stats_options.endofframe = g_ctx->stats_options.endofframe;
+    strcpy(g_ctx->saved_options.stats_options.filename, g_ctx->stats_options.filename);
+    strcpy(g_ctx->saved_options.stats_options.jsonfilename, g_ctx->stats_options.jsonfilename);
+    g_ctx->saved_options.show_progress = g_ctx->show_progress;
+
+    // Track resources for cleanup
+    g_ctx->lights_at_frame_begin = g_ctx->num_lights;
+    g_ctx->objects_at_frame_begin = g_ctx->objects_count;
+}
+
+void RiFrameEnd(void) {
+    if (!g_ctx || !g_ctx->frame_active) return;
+
+    // Restore all options
+    g_ctx->xres = g_ctx->saved_options.xres;
+    g_ctx->yres = g_ctx->saved_options.yres;
+    strcpy(g_ctx->display_name, g_ctx->saved_options.display_name);
+    g_ctx->display_channels = g_ctx->saved_options.display_channels;
+    g_ctx->projection = g_ctx->saved_options.projection;
+    g_ctx->pixel_samples_x = g_ctx->saved_options.pixel_samples_x;
+    g_ctx->pixel_samples_y = g_ctx->saved_options.pixel_samples_y;
+    g_ctx->pixel_filter = g_ctx->saved_options.pixel_filter;
+    g_ctx->filter_width_x = g_ctx->saved_options.filter_width_x;
+    g_ctx->filter_width_y = g_ctx->saved_options.filter_width_y;
+    g_ctx->dof_fstop = g_ctx->saved_options.dof_fstop;
+    g_ctx->dof_focallength = g_ctx->saved_options.dof_focallength;
+    g_ctx->dof_focaldistance = g_ctx->saved_options.dof_focaldistance;
+    g_ctx->shutter_open = g_ctx->saved_options.shutter_open;
+    g_ctx->shutter_close = g_ctx->saved_options.shutter_close;
+    g_ctx->hider_options.jitter = g_ctx->saved_options.hider_options.jitter;
+    g_ctx->stats_options.endofframe = g_ctx->saved_options.stats_options.endofframe;
+    strcpy(g_ctx->stats_options.filename, g_ctx->saved_options.stats_options.filename);
+    strcpy(g_ctx->stats_options.jsonfilename, g_ctx->saved_options.stats_options.jsonfilename);
+    g_ctx->show_progress = g_ctx->saved_options.show_progress;
+
+    // Remove lights created in frame
+    g_ctx->num_lights = g_ctx->lights_at_frame_begin;
+
+    // Free objects created in frame
+    for (int i = g_ctx->objects_at_frame_begin; i < g_ctx->objects_count; i++) {
+        if (g_ctx->objects[i]) {
+            for (int j = 0; j < g_ctx->objects[i]->count; j++) {
+                rh_prim_free_data(&g_ctx->objects[i]->items[j].prim);
+            }
+            free(g_ctx->objects[i]->items);
+            free(g_ctx->objects[i]);
+            g_ctx->objects[i] = NULL;
+        }
+    }
+    g_ctx->objects_count = g_ctx->objects_at_frame_begin;
+
+    g_ctx->frame_active = false;
+}

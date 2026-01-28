@@ -225,6 +225,44 @@ typedef struct {
     RhMat4 inv_transform;
 } RhObject;
 
+// --- Options State (for RiFrameBegin/End save/restore) ---
+
+typedef struct {
+    // Display options
+    int xres, yres;
+    char display_name[256];
+    int display_channels;
+
+    // Camera options
+    RhMat4 projection;
+
+    // Sampling options
+    int pixel_samples_x, pixel_samples_y;
+    RtFilterFunc pixel_filter;
+    float filter_width_x, filter_width_y;
+
+    // Depth of field
+    float dof_fstop, dof_focallength, dof_focaldistance;
+
+    // Motion blur
+    float shutter_open, shutter_close;
+
+    // Hider options
+    struct {
+        int jitter;
+    } hider_options;
+
+    // Statistics options
+    struct {
+        int endofframe;
+        char filename[256];
+        char jsonfilename[256];
+    } stats_options;
+
+    // Progress
+    bool show_progress;
+} RiOptionsState;
+
 // --- Context Data ---
 
 typedef struct {
@@ -369,6 +407,13 @@ typedef struct {
         int pool_hits;                  // Stats: items reused from pool
         int pool_misses;                // Stats: new allocations
     } item_pool;
+
+    // Frame state (RiFrameBegin/End)
+    bool frame_active;
+    int frame_number;
+    RiOptionsState saved_options;
+    int lights_at_frame_begin;    // Track lights to clean up
+    int objects_at_frame_begin;   // Track objects to clean up
 } RiContextData;
 
 // --- Accessor Functions ---

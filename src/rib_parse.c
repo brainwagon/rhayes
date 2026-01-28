@@ -371,6 +371,20 @@ static int cmd_MotionEnd(RibParser* p) {
     return 0;
 }
 
+static int parse_FrameBegin(RibParser* p) {
+    double frame_num;
+    if (expect_number(p, &frame_num) < 0) return -1;
+    if (p->callbacks->FrameBegin)
+        p->callbacks->FrameBegin((RtInt)frame_num);
+    return 0;
+}
+
+static int cmd_FrameEnd(RibParser* p) {
+    if (p->callbacks->FrameEnd)
+        p->callbacks->FrameEnd();
+    return 0;
+}
+
 static int parse_ShadingRate(RibParser* p) {
     double size;
     if (expect_number(p, &size) < 0) return -1;
@@ -912,6 +926,8 @@ static const CommandEntry commands[] = {
     {"Disk", parse_Disk},
     {"Display", parse_Display},
     {"Format", parse_Format},
+    {"FrameBegin", parse_FrameBegin},
+    {"FrameEnd", cmd_FrameEnd},
     {"Geometry", parse_Geometry},
     {"Hider", parse_Hider},
     {"Hyperboloid", parse_Hyperboloid},

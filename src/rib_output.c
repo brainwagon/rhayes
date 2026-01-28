@@ -166,6 +166,20 @@ static void ribout_End(void) {
     // Nothing to output for RiEnd - cleanup happens in rib_output_end()
 }
 
+static void ribout_FrameBegin(RtInt frame) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "FrameBegin %d\n", frame);
+    g_rib_ctx->indent_level++;
+}
+
+static void ribout_FrameEnd(void) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    if (g_rib_ctx->indent_level > 0) g_rib_ctx->indent_level--;
+    write_indent();
+    fprintf(g_rib_ctx->output, "FrameEnd\n");
+}
+
 static void ribout_Declare(const char* name, const char* declaration) {
     if (!g_rib_ctx || !g_rib_ctx->output) return;
     write_indent();
@@ -543,6 +557,8 @@ static void ribout_ObjectInstance(RtInt handle) {
 RiCallbacks ri_output_callbacks = {
     .Begin = ribout_Begin,
     .End = ribout_End,
+    .FrameBegin = ribout_FrameBegin,
+    .FrameEnd = ribout_FrameEnd,
     .Declare = ribout_Declare,
     .Format = ribout_Format,
     .Display = ribout_Display,

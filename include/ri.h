@@ -73,6 +73,10 @@ void RiEnd(void);
 RtPointer RiGetContext(void);
 void RiContext(RtPointer ctx);
 
+// Frame structure
+void RiFrameBegin(RtInt frame);
+void RiFrameEnd(void);
+
 // Variable declarations
 // Associates a token with a type and storage class for parameter list parsing.
 // declaration format: "[class] [type] ['[' n ']']"
