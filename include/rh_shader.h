@@ -8,9 +8,10 @@
 // Shader Inputs/Outputs (Surface Global Variables in RSL)
 typedef struct {
     // Inputs (ReadOnly usually)
-    RhVec3 P;  // Surface Position (Camera Space)
-    RhVec3 N;  // Surface Normal (Camera Space)
-    RhVec3 I;  // Incident Vector (Camera -> Point)
+    RhVec3 P;       // Surface Position (Camera Space)
+    RhVec3 P_world; // Surface Position (World Space) - for shadow lookup
+    RhVec3 N;       // Surface Normal (Camera Space)
+    RhVec3 I;       // Incident Vector (Camera -> Point)
 
     RhColor Cs; // Surface Color
     RhColor Os; // Surface Opacity

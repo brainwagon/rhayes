@@ -1,0 +1,33 @@
+##RenderMan RIB-Structure 1.1
+# Generate shadow map from light position (above and to right of teapot)
+# Light at approximately (4, 12, -4) looking at origin
+
+Format 512 512 1
+PixelSamples 1 1
+Display "tests/shadow/checker_shadow.shd" "file" "z"
+Projection "perspective" "fov" 30
+Sides 2
+
+TransformBegin
+# Position camera at light location [4, 12, -4] looking at origin
+# In RenderMan: Translate sets camera position, then rotations orient the view
+# Direction to origin: (-4, -12, 4) normalized = (-0.301, -0.904, 0.301)
+# ax = acos(0.316) = 71.6 degrees, ay = asin(-0.301) = -17.5 degrees
+Translate 4 12 -4
+Rotate 72 1 0 0
+Rotate -18 0 1 0
+
+WorldBegin
+
+# Gray teapot resting on ground (casts shadow)
+# Note: Checkerboard floor omitted - it only receives shadows, doesn't cast any
+AttributeBegin
+    Surface "matte"
+    Color [0.5 0.5 0.5]
+    Translate 0 -1.5 0
+    Rotate -90 1 0 0
+    Geometry "teapot"
+AttributeEnd
+
+WorldEnd
+TransformEnd

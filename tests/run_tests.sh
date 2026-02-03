@@ -25,12 +25,31 @@ run_parse_test() {
     local rib_file="$1"
     local name="$(basename "$rib_file" .rib)"
 
+    # Skip shadow map generation files for parse test (they're tested via render)
+    if [[ "$name" == *"_map"* ]]; then
+        return
+    fi
+
     if "$CATRIB" "$rib_file" -o /dev/null 2>/dev/null; then
         echo -e "${GREEN}PASS${NC} [parse] $name"
         ((PASS++))
     else
         echo -e "${RED}FAIL${NC} [parse] $name"
         ((FAIL++))
+    fi
+}
+
+run_shadow_map_generation() {
+    # Generate shadow maps before running shadow render tests
+    local shadow_map_rib="$RIB_DIR/shadow/checker_shadow_map.rib"
+    local shadow_map_out="$OUT_DIR/shadow/checker_shadow.shd"
+
+    if [ -f "$shadow_map_rib" ]; then
+        mkdir -p "$(dirname "$shadow_map_out")"
+        local temp_rib="$OUT_DIR/temp_shadow_map.rib"
+        sed "s|Display.*|Display \"$shadow_map_out\" \"file\" \"z\"|" "$shadow_map_rib" > "$temp_rib"
+        "$RENDER" "$temp_rib" 2>/dev/null
+        rm -f "$temp_rib"
     fi
 }
 
@@ -41,11 +60,19 @@ run_render_test() {
     local ref_file="$REF_DIR/${rel_path%.rib}.png"
     local out_file="$OUT_DIR/${rel_path%.rib}.png"
 
+    # Skip shadow map generation RIB files (they output .shd not .png)
+    if [[ "$name" == *"_map"* ]]; then
+        return
+    fi
+
     mkdir -p "$(dirname "$out_file")"
 
     # Create temp RIB with output redirected
     local temp_rib="$OUT_DIR/temp_$name.rib"
-    sed "s|Display.*|Display \"$out_file\" \"file\" \"rgba\"|" "$rib_file" > "$temp_rib"
+    # For shadow render tests, also update the shadow map path
+    sed -e "s|Display.*|Display \"$out_file\" \"file\" \"rgba\"|" \
+        -e "s|tests/shadow/checker_shadow.shd|$OUT_DIR/shadow/checker_shadow.shd|g" \
+        "$rib_file" > "$temp_rib"
 
     if ! "$RENDER" "$temp_rib" 2>/dev/null; then
         echo -e "${RED}FAIL${NC} [render] $name (render failed)"
@@ -74,6 +101,11 @@ run_roundtrip_test() {
     local rib_file="$1"
     local name="$(basename "$rib_file" .rib)"
     local out_rib="$OUT_DIR/roundtrip_$name.rib"
+
+    # Skip shadow map generation files for roundtrip test
+    if [[ "$name" == *"_map"* ]]; then
+        return
+    fi
 
     if ! "$CATRIB" "$rib_file" -o "$out_rib" 2>/dev/null; then
         echo -e "${RED}FAIL${NC} [roundtrip] $name (catrib failed)"
@@ -157,6 +189,9 @@ if [ ! -d "$RIB_DIR" ] || [ -z "$(find "$RIB_DIR" -name "*.rib" 2>/dev/null)" ];
     echo "No test RIB files found in $RIB_DIR"
     exit 1
 fi
+
+# Pre-generate shadow maps for shadow tests
+run_shadow_map_generation
 
 # Find all RIB files
 for rib in $(find "$RIB_DIR" -name "*.rib" | sort); do

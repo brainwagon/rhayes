@@ -24,6 +24,14 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
     l->coneangle = 30.0f;
     l->conedeltaangle = 5.0f;
     l->beamdistribution = 2.0f;
+    // Shadow map defaults
+    l->shadowmap = NULL;
+    l->shadow_samples = 16;
+    l->shadow_bias = 0.05f;  // Bias in world units (5cm default)
+    l->shadow_blur = 1.0f;
+
+    // Store shadow map filename temporarily for loading after parsing
+    const char* shadowmap_file = NULL;
 
     // Parse arguments from token/value arrays
     for (int i = 0; i < count; i++) {
@@ -51,6 +59,28 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
         } else if (strcmp(tokens[i], "beamdistribution") == 0) {
             RtFloat* val = (RtFloat*)values[i];
             l->beamdistribution = *val;
+        } else if (strcmp(tokens[i], "shadowmap") == 0) {
+            shadowmap_file = (const char*)values[i];
+        } else if (strcmp(tokens[i], "shadowsamples") == 0) {
+            RtFloat* val = (RtFloat*)values[i];
+            l->shadow_samples = (int)(*val);
+            if (l->shadow_samples < 1) l->shadow_samples = 1;
+            if (l->shadow_samples > 64) l->shadow_samples = 64;
+        } else if (strcmp(tokens[i], "shadowbias") == 0) {
+            RtFloat* val = (RtFloat*)values[i];
+            l->shadow_bias = *val;
+        } else if (strcmp(tokens[i], "shadowblur") == 0) {
+            RtFloat* val = (RtFloat*)values[i];
+            l->shadow_blur = *val;
+            if (l->shadow_blur < 0.0f) l->shadow_blur = 0.0f;
+        }
+    }
+
+    // Load shadow map if specified
+    if (shadowmap_file) {
+        l->shadowmap = rh_shadowmap_read(shadowmap_file);
+        if (!l->shadowmap) {
+            fprintf(stderr, "Warning: Failed to load shadow map '%s' for light\n", shadowmap_file);
         }
     }
 
@@ -58,6 +88,7 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
     l->direction = rh_vec3_normalize(rh_vec3_sub(l->position, to));
 
     // Transform to world space
+    l->transform = ri_curr()->transform;
     l->position = rh_mat4_mul_point(ri_curr()->transform, l->position);
     RhVec3 to_world = rh_mat4_mul_point(ri_curr()->transform, to);
     l->direction = rh_vec3_normalize(rh_vec3_sub(l->position, to_world));

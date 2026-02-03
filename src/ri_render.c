@@ -1103,6 +1103,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
         RhVec3* screen_pos_t1 = has_motion ? scratch->screen_pos_t1 : NULL;
         RhVec3* cam_positions = scratch->cam_positions;
         RhVec3* cam_normals = scratch->cam_normals;
+        RhVec3* world_positions = scratch->world_positions;
 
         for (int i = 0; i < gridSize * gridSize; i++) {
             RhVec3 pos_obj = grid->positions[i];
@@ -1112,6 +1113,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             RhVec3 norm_world = rh_mat4_mul_dir(model_inv_tr, norm_obj);
             norm_world = rh_vec3_normalize(norm_world);
 
+            world_positions[i] = pos_world;
             cam_positions[i] = rh_mat4_mul_point(view, pos_world);
             cam_normals[i] = rh_vec3_normalize(rh_mat4_mul_dir(view, norm_world));
 
@@ -1124,7 +1126,8 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
                 RhVec3 pos_ndc = rh_mat4_mul_point(proj, cam_positions[i]);
                 float rx = (pos_ndc.x + 1.0f) * 0.5f * ctx->ss_xres;
                 float ry = (1.0f - (pos_ndc.y + 1.0f) * 0.5f) * ctx->ss_yres;
-                screen_pos[i] = rh_vec3_create(rx, ry, pos_ndc.z);
+                // Store camera-space z for shadow maps (world units)
+                screen_pos[i] = rh_vec3_create(rx, ry, cam_positions[i].z);
             }
 
             if (has_motion) {
@@ -1140,7 +1143,8 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
                     RhVec3 pos_ndc_t1 = rh_mat4_mul_point(proj, pos_cam_t1);
                     float rx_t1 = (pos_ndc_t1.x + 1.0f) * 0.5f * ctx->ss_xres;
                     float ry_t1 = (1.0f - (pos_ndc_t1.y + 1.0f) * 0.5f) * ctx->ss_yres;
-                    screen_pos_t1[i] = rh_vec3_create(rx_t1, ry_t1, pos_ndc_t1.z);
+                    // Store camera-space z for shadow maps (world units)
+                    screen_pos_t1[i] = rh_vec3_create(rx_t1, ry_t1, pos_cam_t1.z);
                 }
             }
         }
@@ -1257,6 +1261,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
 
             RhShaderContext shctx;
             shctx.P = cam_positions[i];
+            shctx.P_world = world_positions[i];
             shctx.N = cam_normals[i];
             shctx.I = cam_positions[i];
             shctx.Cs = cur_col;
@@ -1313,6 +1318,19 @@ void RiWorldBegin(void) {
     ctx->world_active = true;
 
     ctx->view_matrix = rh_mat4_inverse(ri_curr()->transform);
+
+    // Capture world-to-NDC matrix for shadow map output
+    ctx->world_to_ndc = rh_mat4_mul(ctx->projection, ctx->view_matrix);
+
+    // Allocate depth buffer for shadow map rendering
+    if (ctx->display_mode == RH_DISPLAY_Z) {
+        if (ctx->depth_buffer) free(ctx->depth_buffer);
+        ctx->depth_buffer = (float*)malloc(ctx->xres * ctx->yres * sizeof(float));
+        // Initialize to far plane (1.0 in NDC)
+        for (int i = 0; i < ctx->xres * ctx->yres; i++) {
+            ctx->depth_buffer[i] = 1.0f;
+        }
+    }
 
     ctx->num_buckets_x = (ctx->ss_xres + ctx->bucket_size - 1) / ctx->bucket_size;
     ctx->num_buckets_y = (ctx->ss_yres + ctx->bucket_size - 1) / ctx->bucket_size;
@@ -1536,7 +1554,43 @@ void RiWorldEnd(void) {
         ctx->raster->image = final_image;
     }
 
-    if (ctx->raster && ctx->raster->image) {
+    // Save output based on display mode
+    if (ctx->display_mode == RH_DISPLAY_Z) {
+        // Shadow map output - extract depth from rasterizer and save as .shd file
+        if (ctx->raster) {
+            RhShadowMap* sm = rh_shadowmap_create(ctx->xres, ctx->yres);
+            if (sm) {
+                sm->near_clip = ctx->near_clip;
+                sm->far_clip = ctx->far_clip;
+                sm->world_to_light_ndc = ctx->world_to_ndc;
+                sm->world_to_light_camera = ctx->view_matrix;
+
+                // Copy depth values from rasterizer (downsampled if supersampled)
+                // Depths are now camera-space z (world units), not NDC
+                int sx = ctx->pixel_samples_x;
+                int sy = ctx->pixel_samples_y;
+                for (int py = 0; py < ctx->yres; py++) {
+                    for (int px = 0; px < ctx->xres; px++) {
+                        // Find minimum depth across all subsamples (closest surface)
+                        float min_z = 1e30f;
+                        for (int ssy = 0; ssy < sy; ssy++) {
+                            for (int ssx = 0; ssx < sx; ssx++) {
+                                int src_x = px * sx + ssx;
+                                int src_y = py * sy + ssy;
+                                float z = ctx->raster->zbuffer[src_y * ctx->ss_xres + src_x];
+                                if (z < min_z) min_z = z;
+                            }
+                        }
+                        sm->depths[py * ctx->xres + px] = min_z;
+                    }
+                }
+
+                rh_shadowmap_write(ctx->display_name, sm);
+                rh_shadowmap_destroy(sm);
+                fprintf(stderr, "Saved shadow map to %s\n", ctx->display_name);
+            }
+        }
+    } else if (ctx->raster && ctx->raster->image) {
         rh_image_save_png_channels(ctx->raster->image, ctx->display_name, ctx->display_channels);
     }
 

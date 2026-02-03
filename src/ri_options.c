@@ -163,14 +163,18 @@ void RiDisplayV(RtToken name, RtToken type, RtToken mode, RtToken* tokens, RtPoi
     if (!ctx) return;
     if (name) strncpy(ctx->display_name, name, 255);
 
-    // Parse mode to determine channel count
+    // Parse mode to determine channel count and display mode
     if (mode) {
         if (strcmp(mode, "rgb") == 0) {
             ctx->display_channels = 3;
+            ctx->display_mode = RH_DISPLAY_RGB;
         } else if (strcmp(mode, "rgba") == 0) {
             ctx->display_channels = 4;
+            ctx->display_mode = RH_DISPLAY_RGBA;
+        } else if (strcmp(mode, "z") == 0) {
+            ctx->display_channels = 1;
+            ctx->display_mode = RH_DISPLAY_Z;
         }
-        // Other modes (z, etc.) not yet supported
     }
 
     (void)type;    // "file" is the only supported type
@@ -247,14 +251,20 @@ void RiProjectionV(RtToken name, RtToken* tokens, RtPointer* values, int count) 
 
     if (strcmp(name, "perspective") == 0) {
         // Construct Projection Matrix
-        float fov_rad = fov * (RH_PI / 180.0f);
+        // Widen FOV by 10% for shadow maps to avoid edge artifacts
+        float actual_fov = fov;
+        if (ctx->display_mode == RH_DISPLAY_Z) {
+            actual_fov *= 1.1f;
+        }
+        float fov_rad = actual_fov * (RH_PI / 180.0f);
         float aspect = (float)ctx->xres / (float)ctx->yres;
         float f = 1.0f / tanf(fov_rad / 2.0f);
         float zNear = 0.1f;
         float zFar = 1e30f;
 
-        // Store near clip distance for culling
+        // Store clip distances for culling and shadow maps
         ctx->near_clip = zNear;
+        ctx->far_clip = zFar;
 
         ctx->projection = rh_mat4_identity();
         ctx->projection.m[0][0] = f / aspect;

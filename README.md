@@ -96,7 +96,12 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
 - **Basis Matrices**: Support for `RiBasis` (Bezier, B-Spline, Catmull-Rom, etc.).
 - **Shading & Lighting**:
     - Surface shaders: `matte`, `plastic`, `metal`, `paintedplastic` (textured), and diagnostic shaders (`random`, `randomgrid`).
-    - Light sources: Point, Distant, and Ambient lights.
+    - Light sources: Point, Distant, Ambient, and Spotlight.
+- **Shadow Mapping**:
+    - Depth-based shadow maps with Percentage Closer Filtering (PCF).
+    - Configurable shadow samples, bias, and blur for soft shadow edges.
+    - Shadow maps store camera-space z (world units) for intuitive bias values.
+    - Two-pass workflow: generate shadow map, then render with shadows.
 - **Motion Blur**:
     - Temporal sampling with configurable shutter interval (`RiShutter`).
     - Transform motion blur via `MotionBegin`/`MotionEnd` blocks.

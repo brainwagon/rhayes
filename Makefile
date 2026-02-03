@@ -11,7 +11,7 @@ BIN_DIR = bin
 # Object files by library
 LIBRH_OBJS = $(OBJ_DIR)/rh_math.o $(OBJ_DIR)/rh_geometry.o $(OBJ_DIR)/rh_shader.o \
              $(OBJ_DIR)/rh_raster.o $(OBJ_DIR)/rh_image.o $(OBJ_DIR)/lodepng.o \
-             $(OBJ_DIR)/rh_texture.o
+             $(OBJ_DIR)/rh_texture.o $(OBJ_DIR)/rh_shadow.o
 LIBRI_OBJS = $(OBJ_DIR)/ri_context.o $(OBJ_DIR)/ri_state.o $(OBJ_DIR)/ri_light.o \
              $(OBJ_DIR)/ri_primitive.o $(OBJ_DIR)/ri_render.o $(OBJ_DIR)/ri_options.o \
              $(OBJ_DIR)/ri_declare.o

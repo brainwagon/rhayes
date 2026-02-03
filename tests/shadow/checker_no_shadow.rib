@@ -1,0 +1,57 @@
+##RenderMan RIB-Structure 1.1
+# Same scene WITHOUT shadow map for comparison
+
+Format 1280 720 1
+PixelSamples 4 4
+Display "tests/shadow/checker_no_shadow.png" "file" "rgb"
+Projection "perspective" "fov" 45
+
+TransformBegin
+Rotate 20 1 0 0
+Translate 0 0 -12
+
+WorldBegin
+
+# Same spotlight but NO shadow map
+LightSource "spotlight" "from" [4 12 -4] "to" [0 0 0] "intensity" 1 "coneangle" 60 "conedeltaangle" 5
+
+LightSource "ambientlight" "intensity" 0.15
+
+# Gray teapot resting on ground
+AttributeBegin
+    Surface "plastic"
+    Color [0.6 0.6 0.6]
+    Translate 0 -1.5 0
+    Rotate -90 1 0 0
+    Geometry "teapot"
+AttributeEnd
+
+# Checkerboard ground
+AttributeBegin
+    Surface "matte"
+    Translate 0 -1.5 0
+    Rotate -90 1 0 0
+
+    Color [0.8 0.2 0.2]
+    Polygon "P" [-4 -4 0  -2 -4 0  -2 -2 0  -4 -2 0]
+    Polygon "P" [0 -4 0  2 -4 0  2 -2 0  0 -2 0]
+    Polygon "P" [-2 -2 0  0 -2 0  0 0 0  -2 0 0]
+    Polygon "P" [2 -2 0  4 -2 0  4 0 0  2 0 0]
+    Polygon "P" [-4 0 0  -2 0 0  -2 2 0  -4 2 0]
+    Polygon "P" [0 0 0  2 0 0  2 2 0  0 2 0]
+    Polygon "P" [-2 2 0  0 2 0  0 4 0  -2 4 0]
+    Polygon "P" [2 2 0  4 2 0  4 4 0  2 4 0]
+
+    Color [0.2 0.8 0.2]
+    Polygon "P" [-2 -4 0  0 -4 0  0 -2 0  -2 -2 0]
+    Polygon "P" [2 -4 0  4 -4 0  4 -2 0  2 -2 0]
+    Polygon "P" [-4 -2 0  -2 -2 0  -2 0 0  -4 0 0]
+    Polygon "P" [0 -2 0  2 -2 0  2 0 0  0 0 0]
+    Polygon "P" [-2 0 0  0 0 0  0 2 0  -2 2 0]
+    Polygon "P" [2 0 0  4 0 0  4 2 0  2 2 0]
+    Polygon "P" [-4 2 0  -2 2 0  -2 4 0  -4 4 0]
+    Polygon "P" [0 2 0  2 2 0  2 4 0  0 4 0]
+AttributeEnd
+
+WorldEnd
+TransformEnd

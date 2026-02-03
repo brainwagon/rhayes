@@ -816,7 +816,10 @@ static int parse_LightSource(RibParser* p) {
     RtPointer values[MAX_PARAMS];
     float* arrays[MAX_PARAMS];
     float scalars[MAX_PARAMS];
+    char* string_values[MAX_PARAMS];
     int param_count = 0;
+
+    for (int i = 0; i < MAX_PARAMS; i++) string_values[i] = NULL;
 
     while (p->current_token.type == TOK_STRING) {
         tokens[param_count] = strdup(p->current_token.value.string);
@@ -834,6 +837,14 @@ static int parse_LightSource(RibParser* p) {
             arrays[param_count] = (float*)malloc(count * sizeof(float));
             memcpy(arrays[param_count], p->float_array, count * sizeof(float));
             values[param_count] = arrays[param_count];
+        } else if (p->current_token.type == TOK_STRING) {
+            // String value parameter (e.g., shadowmap filename)
+            string_values[param_count] = strdup(p->current_token.value.string);
+            values[param_count] = string_values[param_count];
+            arrays[param_count] = NULL;
+            next_token(p);
+        } else {
+            arrays[param_count] = NULL;
         }
         param_count++;
         if (param_count >= MAX_PARAMS) break;
@@ -844,6 +855,7 @@ static int parse_LightSource(RibParser* p) {
     for (int i = 0; i < param_count; i++) {
         free(tokens[i]);
         if (arrays[i]) free(arrays[i]);
+        if (string_values[i]) free(string_values[i]);
     }
     return 0;
 }

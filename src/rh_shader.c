@@ -1,7 +1,9 @@
 #include "rh_shader.h"
 #include "rh_texture.h"
+#include "rh_shadow.h"
 #include <math.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,18 +34,23 @@ RhPrimVar* rh_shader_get_primvar(RhShaderContext* ctx, const char* name) {
 
 #include "rh_math.h"
 
-// Temporary Light Struct for this file (must match ri.c RhLight exactly!)
+// Temporary Light Struct for this file (must match ri_internal.h RhLight exactly!)
 typedef struct {
     char type[32];
     RhVec3 position;
     RhVec3 direction;
     RhColor color;
     float intensity;
-    RhMat4 transform;  // Must include this to match ri.c RhLight struct size
+    RhMat4 transform;  // Must include this to match RhLight struct size
     // Spotlight parameters
     float coneangle;
     float conedeltaangle;
     float beamdistribution;
+    // Shadow map parameters
+    RhShadowMap* shadowmap;
+    int shadow_samples;
+    float shadow_bias;
+    float shadow_blur;
 } RhLight_ShaderView;
 
 static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor* diff, RhColor* spec, float roughness) {
@@ -66,7 +73,7 @@ static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor
         lc.g = l->color.g * l->intensity;
         lc.b = l->color.b * l->intensity;
 
-        // Ambient light - contributes uniformly
+        // Ambient light - contributes uniformly (no shadows for ambient)
         if (l->type[0] == 'a') { // "ambientlight"
             ambient_out->r += lc.r;
             ambient_out->g += lc.g;
@@ -108,6 +115,28 @@ static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor
         } else { // "pointlight" or other
             L = rh_vec3_normalize(rh_vec3_sub(l->position, ctx->P));
         }
+
+        // Shadow map lookup (if light has shadow map)
+        float shadow_factor = 0.0f;
+        if (l->shadowmap && attenuation > 0.0f) {
+            // Check if point is in shadow map frustum
+            if (rh_shadow_in_frustum(l->shadowmap, ctx->P_world)) {
+                shadow_factor = rh_shadow_pcf_lookup(
+                    l->shadowmap,
+                    ctx->P_world,
+                    l->shadow_samples,
+                    l->shadow_bias,
+                    l->shadow_blur
+                );
+            } else {
+                // Outside shadow map frustum - assume fully lit
+                shadow_factor = 0.0f;
+            }
+        }
+
+        // Apply shadow attenuation (1.0 = fully shadowed, 0.0 = fully lit)
+        float light_visibility = 1.0f - shadow_factor;
+        attenuation *= light_visibility;
 
         float n_dot_l = rh_vec3_dot(Nn, L);
 

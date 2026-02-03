@@ -22,12 +22,21 @@
 #include "rh_raster.h"
 #include "rh_shader.h"
 #include "rh_texture.h"
+#include "rh_shadow.h"
 
 // --- Constants ---
 
 #define MAX_STACK_DEPTH 64
 #define MAX_DECLARATIONS 256
 #define MAX_LIGHTS 8
+
+// --- Display Mode ---
+
+typedef enum {
+    RH_DISPLAY_RGB,     // Normal color rendering (3 channels)
+    RH_DISPLAY_RGBA,    // Color + alpha (4 channels)
+    RH_DISPLAY_Z        // Depth-only for shadow maps (1 channel, float)
+} RhDisplayMode;
 
 // Grid size constants for adaptive splitting/dicing
 #define MAX_GRID_SIZE 16
@@ -200,6 +209,11 @@ typedef struct {
     float coneangle;        // Half-angle of full illumination cone (degrees)
     float conedeltaangle;   // Penumbra width (degrees)
     float beamdistribution; // Cosine power for beam shape
+    // Shadow map parameters
+    RhShadowMap* shadowmap;     // Shadow map data (NULL if no shadows)
+    int shadow_samples;         // Number of PCF samples (default 16)
+    float shadow_bias;          // Depth bias (default 0.005)
+    float shadow_blur;          // Filter size multiplier (default 1.0)
 } RhLight;
 
 // --- Grid Scratch Buffers ---
@@ -209,6 +223,7 @@ typedef struct {
     RhVec3 screen_pos_t1[MAX_GRID_SIZE * MAX_GRID_SIZE];
     RhVec3 cam_positions[MAX_GRID_SIZE * MAX_GRID_SIZE];
     RhVec3 cam_normals[MAX_GRID_SIZE * MAX_GRID_SIZE];
+    RhVec3 world_positions[MAX_GRID_SIZE * MAX_GRID_SIZE];
 } RhGridScratch;
 
 // --- Object (Retained Geometry) ---
@@ -269,7 +284,8 @@ typedef struct {
     // Options
     int xres, yres;
     char display_name[256];
-    int display_channels;  // 3 for RGB, 4 for RGBA
+    int display_channels;  // 3 for RGB, 4 for RGBA, 1 for Z
+    RhDisplayMode display_mode;  // RGB, RGBA, or Z (shadow map)
     RhMat4 projection;
 
     // Supersampling
@@ -401,6 +417,11 @@ typedef struct {
 
     // Near plane clipping
     float near_clip;            // Near clipping plane distance (default 0.1)
+    float far_clip;             // Far clipping plane distance (default 1e30)
+
+    // Shadow map output (when display_mode == RH_DISPLAY_Z)
+    float* depth_buffer;        // Depth buffer for shadow map output
+    RhMat4 world_to_ndc;        // Combined view * projection for shadow map
 
     // Render item pool for memory reuse
     struct {
