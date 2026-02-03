@@ -71,6 +71,13 @@ void ri_add_geometry(RhPrimitive* p) {
             } else {
                 item->prim.data.polygon.st = NULL;
             }
+            // Deep copy vertex normals if present
+            if (p->data.polygon.normals) {
+                item->prim.data.polygon.normals = (RhVec3*)malloc(p->data.polygon.count * sizeof(RhVec3));
+                memcpy(item->prim.data.polygon.normals, p->data.polygon.normals, p->data.polygon.count * sizeof(RhVec3));
+            } else {
+                item->prim.data.polygon.normals = NULL;
+            }
         }
         item->transform = ri_curr()->transform;
     } else {
@@ -567,9 +574,10 @@ void RiPolygonV(RtInt nvertices, RtToken* tokens, RtPointer* values, int count) 
     RiContextData* ctx = ri_get_ctx();
     if (!ctx) return;
 
-    // Find the "P" parameter
+    // Find the "P", "N", and "st" parameters
     RhVec3* points = NULL;
     RhFloat* st_data = NULL;
+    RhVec3* normals = NULL;
 
     for (int i = 0; i < count; i++) {
         if (tokens[i] && strcmp(tokens[i], "P") == 0) {
@@ -582,16 +590,24 @@ void RiPolygonV(RtInt nvertices, RtToken* tokens, RtPointer* values, int count) 
             RtFloat* st = (RtFloat*)values[i];
             st_data = (RhFloat*)malloc(nvertices * 2 * sizeof(RhFloat));
             memcpy(st_data, st, nvertices * 2 * sizeof(RhFloat));
+        } else if (tokens[i] && strcmp(tokens[i], "N") == 0) {
+            RtFloat* n = (RtFloat*)values[i];
+            normals = (RhVec3*)malloc(nvertices * sizeof(RhVec3));
+            for (int j = 0; j < nvertices; j++) {
+                normals[j] = rh_vec3_create(n[j*3], n[j*3+1], n[j*3+2]);
+            }
         }
     }
 
     if (!points) {
         free(st_data);
+        free(normals);
         return;
     }
 
     RhPrimitive prim = rh_prim_create_polygon(nvertices, points);
-    prim.data.polygon.st = st_data;  // Attach st coords (may be NULL)
+    prim.data.polygon.st = st_data;      // Attach st coords (may be NULL)
+    prim.data.polygon.normals = normals; // Attach vertex normals (may be NULL)
     ri_parse_primvars(&prim, tokens, values, count);
     ri_add_geometry(&prim);
     rh_prim_free_data(&prim);

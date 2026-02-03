@@ -77,6 +77,7 @@ typedef struct {
     int count;
     RhVec3* vertices;
     RhFloat* st;      // Texture coords, 2 floats per vertex (NULL if not provided)
+    RhVec3* normals;  // Vertex normals (NULL if not provided, uses face normal)
 } RhPolygon;
 
 typedef struct {

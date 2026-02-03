@@ -93,6 +93,13 @@ RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* transfor
         } else {
             item->prim.data.polygon.st = NULL;
         }
+        // Deep copy vertex normals if present
+        if (p->data.polygon.normals) {
+            item->prim.data.polygon.normals = (RhVec3*)malloc(p->data.polygon.count * sizeof(RhVec3));
+            memcpy(item->prim.data.polygon.normals, p->data.polygon.normals, p->data.polygon.count * sizeof(RhVec3));
+        } else {
+            item->prim.data.polygon.normals = NULL;
+        }
     }
     // Deep copy primvars
     if (p->num_primvars > 0 && p->primvars) {

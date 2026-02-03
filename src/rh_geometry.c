@@ -239,7 +239,8 @@ RhPrimitive rh_prim_create_polygon(int count, const RhVec3* vertices) {
     if (p.data.polygon.vertices && vertices) {
         memcpy(p.data.polygon.vertices, vertices, count * sizeof(RhVec3));
     }
-    p.data.polygon.st = NULL;  // Texture coords set separately if provided
+    p.data.polygon.st = NULL;      // Texture coords set separately if provided
+    p.data.polygon.normals = NULL; // Vertex normals set separately if provided
     p.u_min = 0.0f; p.u_max = 1.0f;
     p.v_min = 0.0f; p.v_max = 1.0f;
     p.primvars = NULL; p.num_primvars = 0;
@@ -277,6 +278,10 @@ void rh_prim_free_data(RhPrimitive* p) {
         if (p->data.polygon.st) {
             free(p->data.polygon.st);
             p->data.polygon.st = NULL;
+        }
+        if (p->data.polygon.normals) {
+            free(p->data.polygon.normals);
+            p->data.polygon.normals = NULL;
         }
     }
     // Free any attached primvars
@@ -436,6 +441,13 @@ int rh_prim_split(const RhPrimitive* p, RhPrimitive* children) {
             RhFloat s3 = st ? ((n>3) ? st[6] : st[0]) : 0.0f;
             RhFloat t3 = st ? ((n>3) ? st[7] : st[1]) : 1.0f;
 
+            // Get vertex normals if present
+            RhVec3* norms = p->data.polygon.normals;
+            RhVec3 n0 = norms ? norms[0] : rh_vec3_create(0, 0, 1);
+            RhVec3 n1 = norms ? norms[1] : rh_vec3_create(0, 0, 1);
+            RhVec3 n2 = norms ? ((n>2) ? norms[2] : norms[1]) : rh_vec3_create(0, 0, 1);
+            RhVec3 n3 = norms ? ((n>3) ? norms[3] : norms[0]) : rh_vec3_create(0, 0, 1);
+
             // We always split at parametric 0.5 relative to current?
             // Wait, rh_prim_split is usually parametric.
             // But for polygons, we usually physically split the geometry.
@@ -477,6 +489,24 @@ int rh_prim_split(const RhPrimitive* p, RhPrimitive* children) {
                      children[1].data.polygon.st[6] = s32; children[1].data.polygon.st[7] = t32;
                  }
 
+                 // Interpolate vertex normals at midpoints
+                 if (norms) {
+                     RhVec3 n01 = rh_vec3_normalize(LERP(n0, n1, 0.5f));
+                     RhVec3 n32 = rh_vec3_normalize(LERP(n3, n2, 0.5f));
+
+                     children[0].data.polygon.normals = (RhVec3*)malloc(4 * sizeof(RhVec3));
+                     children[0].data.polygon.normals[0] = n0;
+                     children[0].data.polygon.normals[1] = n01;
+                     children[0].data.polygon.normals[2] = n32;
+                     children[0].data.polygon.normals[3] = n3;
+
+                     children[1].data.polygon.normals = (RhVec3*)malloc(4 * sizeof(RhVec3));
+                     children[1].data.polygon.normals[0] = n01;
+                     children[1].data.polygon.normals[1] = n1;
+                     children[1].data.polygon.normals[2] = n2;
+                     children[1].data.polygon.normals[3] = n32;
+                 }
+
                  // Inherit UVs (if we tracked them per vert, but we track global)
                  children[0].u_min = p->u_min; children[0].u_max = (p->u_min + p->u_max)*0.5f;
                  children[1].u_min = (p->u_min + p->u_max)*0.5f; children[1].u_max = p->u_max;
@@ -509,6 +539,24 @@ int rh_prim_split(const RhPrimitive* p, RhPrimitive* children) {
                      children[1].data.polygon.st[2] = s12; children[1].data.polygon.st[3] = t12;
                      children[1].data.polygon.st[4] = s2;  children[1].data.polygon.st[5] = t2;
                      children[1].data.polygon.st[6] = s3;  children[1].data.polygon.st[7] = t3;
+                 }
+
+                 // Interpolate vertex normals at midpoints
+                 if (norms) {
+                     RhVec3 n03 = rh_vec3_normalize(LERP(n0, n3, 0.5f));
+                     RhVec3 n12 = rh_vec3_normalize(LERP(n1, n2, 0.5f));
+
+                     children[0].data.polygon.normals = (RhVec3*)malloc(4 * sizeof(RhVec3));
+                     children[0].data.polygon.normals[0] = n0;
+                     children[0].data.polygon.normals[1] = n1;
+                     children[0].data.polygon.normals[2] = n12;
+                     children[0].data.polygon.normals[3] = n03;
+
+                     children[1].data.polygon.normals = (RhVec3*)malloc(4 * sizeof(RhVec3));
+                     children[1].data.polygon.normals[0] = n03;
+                     children[1].data.polygon.normals[1] = n12;
+                     children[1].data.polygon.normals[2] = n2;
+                     children[1].data.polygon.normals[3] = n3;
                  }
 
                  children[0].v_min = p->v_min; children[0].v_max = (p->v_min + p->v_max)*0.5f;
@@ -898,6 +946,35 @@ static void interpolate_polygon_st(const RhPrimitive* p, RhFloat u, RhFloat v,
            + u_local*v_local*t2 + (1-u_local)*v_local*t3;
 }
 
+// Interpolate polygon vertex normals using bilinear interpolation
+static RhVec3 interpolate_polygon_normal(const RhPrimitive* p, RhFloat u, RhFloat v) {
+    RhFloat u_local = (p->u_max == p->u_min) ? 0.0f : (u - p->u_min) / (p->u_max - p->u_min);
+    RhFloat v_local = (p->v_max == p->v_min) ? 0.0f : (v - p->v_min) / (p->v_max - p->v_min);
+
+    RhVec3* norms = p->data.polygon.normals;
+    int n = p->data.polygon.count;
+
+    RhVec3 n0 = norms[0];
+    RhVec3 n1 = norms[1];
+    RhVec3 n2 = (n > 2) ? norms[2] : norms[1];
+    RhVec3 n3 = (n > 3) ? norms[3] : norms[0];
+
+    // Bilinear interpolation (same pattern as vertex positions)
+    // N(u,v) = (1-u)(1-v)*N0 + u(1-v)*N1 + u*v*N2 + (1-u)*v*N3
+    RhFloat w00 = (1-u_local) * (1-v_local);
+    RhFloat w10 = u_local * (1-v_local);
+    RhFloat w11 = u_local * v_local;
+    RhFloat w01 = (1-u_local) * v_local;
+
+    RhVec3 result;
+    result.x = w00*n0.x + w10*n1.x + w11*n2.x + w01*n3.x;
+    result.y = w00*n0.y + w10*n1.y + w11*n2.y + w01*n3.y;
+    result.z = w00*n0.z + w10*n1.z + w11*n2.z + w01*n3.z;
+
+    // Normalize the interpolated normal
+    return rh_vec3_normalize(result);
+}
+
 void rh_prim_dice(const RhPrimitive* p, int u_res, int v_res, RhMicroGrid* grid) {
     // Fill the grid with vertices
     // We iterate u_res and v_res steps over the primitive's current u_min/max range
@@ -926,112 +1003,121 @@ void rh_prim_dice(const RhPrimitive* p, int u_res, int v_res, RhMicroGrid* grid)
             }
             
             // Calculate Normals
-            // For analytical surfaces, we could compute derivative, but for MVP let's use Finite Differences
-            // or just use the center-difference from neighbors in the grid?
-            // Since we are inside the 'dice' loop, we have u,v.
-            // Let's compute analytical normals if possible, or fallback to position approximation.
-            // For Sphere at origin: Normal = Normalize(Pos).
-            // For Cylinder: Normal = Normalize(x, y, 0).
-            // For others it varies.
-            
-            // To be robust and generic (like REYES), we should compute derivatives dPdu and dPdv
-            // and Cross(dPdu, dPdv).
-            // Let's approximate dPdu and dPdv by sampling a tiny epsilon away.
-            RhFloat eps = 1e-4f;
-            
-            // Re-evaluate slightly offset (clamped to domain? ignore domain for derivative check)
-            // Just use the math functions again.
-            
-            RhVec3 p_plus_u, p_plus_v;
-            
-             switch (p->type) {
-                case RH_PRIM_SPHERE:
-                    p_plus_u = evaluate_sphere(p, u + eps, v);
-                    p_plus_v = evaluate_sphere(p, u, v + eps);
-                    break;
-                case RH_PRIM_CYLINDER:
-                    p_plus_u = evaluate_cylinder(p, u + eps, v);
-                    p_plus_v = evaluate_cylinder(p, u, v + eps);
-                    break;
-                case RH_PRIM_CONE:
-                    p_plus_u = evaluate_cone(p, u + eps, v);
-                    p_plus_v = evaluate_cone(p, u, v + eps);
-                    break;
-                case RH_PRIM_PARABOLOID:
-                    p_plus_u = evaluate_paraboloid(p, u + eps, v);
-                    p_plus_v = evaluate_paraboloid(p, u, v + eps);
-                    break;
-                case RH_PRIM_POLYGON:
-                    p_plus_u = evaluate_polygon(p, u + eps, v);
-                    p_plus_v = evaluate_polygon(p, u, v + eps);
-                    break;
-                case RH_PRIM_PATCH_BICUBIC:
-                    p_plus_u = evaluate_patch_bicubic(p, u + eps, v);
-                    p_plus_v = evaluate_patch_bicubic(p, u, v + eps);
-                    break;
-                case RH_PRIM_PATCH_BILINEAR:
-                    p_plus_u = evaluate_patch_bilinear(p, u + eps, v);
-                    p_plus_v = evaluate_patch_bilinear(p, u, v + eps);
-                    break;
-                case RH_PRIM_DISK:
-                    p_plus_u = evaluate_disk(p, u + eps, v);
-                    p_plus_v = evaluate_disk(p, u, v + eps);
-                    break;
-                case RH_PRIM_TORUS:
-                    p_plus_u = evaluate_torus(p, u + eps, v);
-                    p_plus_v = evaluate_torus(p, u, v + eps);
-                    break;
-                case RH_PRIM_HYPERBOLOID:
-                    p_plus_u = evaluate_hyperboloid(p, u + eps, v);
-                    p_plus_v = evaluate_hyperboloid(p, u, v + eps);
-                    break;
-            }
-            
-            RhVec3 dPdu = rh_vec3_div(rh_vec3_sub(p_plus_u, pos), eps);
-            RhVec3 dPdv = rh_vec3_div(rh_vec3_sub(p_plus_v, pos), eps);
+            // For polygons with vertex normals, use bilinear interpolation for smooth shading
+            // For other primitives, use finite differences or analytic normals
+            RhVec3 norm;
 
-            RhVec3 norm = rh_vec3_cross(dPdu, dPdv); // Standard: dPdu x dPdv
-
-            // Use analytic normals for primitives where we know the formula
-            // This avoids numerical precision issues with finite differences
-            // (e.g., disk edges can produce wrong-sign normals)
-            if (p->type == RH_PRIM_DISK) {
-                // Disk normal is always +Z (flat surface, known analytically)
-                norm = rh_vec3_create(0.0f, 0.0f, 1.0f);
+            if (p->type == RH_PRIM_POLYGON && p->data.polygon.normals) {
+                // Use interpolated vertex normals for smooth shading
+                norm = interpolate_polygon_normal(p, u, v);
             } else {
-                // Check if cross product is degenerate (e.g., at poles of sphere, center of disk)
-                RhFloat norm_len_sq = norm.x*norm.x + norm.y*norm.y + norm.z*norm.z;
-                if (norm_len_sq < 1e-8f) {
-                    // Fallback: use analytic normals for known primitives
-                    if (p->type == RH_PRIM_SPHERE) {
-                        // For sphere centered at origin: N = normalize(P)
-                        norm = rh_vec3_normalize(pos);
-                    } else if (p->type == RH_PRIM_CYLINDER) {
-                        // For cylinder along z-axis: N = normalize(x, y, 0)
-                        norm = rh_vec3_normalize(rh_vec3_create(pos.x, pos.y, 0.0f));
-                    } else if (p->type == RH_PRIM_CONE) {
-                        // For cone along z-axis, normal depends on cone angle
-                        norm = rh_vec3_normalize(rh_vec3_create(pos.x, pos.y, 0.0f));
-                    } else if (p->type == RH_PRIM_TORUS) {
-                        // Torus normal points outward from tube center
-                        RhFloat R = p->data.torus.majorradius;
-                        RhFloat theta_rad = u * p->data.torus.theta_max * (RH_PI / 180.0f);
-                        RhVec3 ring_center = rh_vec3_create(R * cosf(theta_rad), R * sinf(theta_rad), 0.0f);
-                        norm = rh_vec3_normalize(rh_vec3_sub(pos, ring_center));
-                    } else {
-                        // Last resort: use any non-zero derivative as normal direction
-                        RhFloat dPdu_len_sq = dPdu.x*dPdu.x + dPdu.y*dPdu.y + dPdu.z*dPdu.z;
-                        RhFloat dPdv_len_sq = dPdv.x*dPdv.x + dPdv.y*dPdv.y + dPdv.z*dPdv.z;
-                        if (dPdv_len_sq > dPdu_len_sq) {
-                            norm = rh_vec3_normalize(dPdv);
-                        } else if (dPdu_len_sq > 1e-8f) {
-                            norm = rh_vec3_normalize(dPdu);
-                        } else {
-                            norm = rh_vec3_create(0.0f, 0.0f, 1.0f); // Default up
-                        }
-                    }
+                // For analytical surfaces, we could compute derivative, but for MVP let's use Finite Differences
+                // or just use the center-difference from neighbors in the grid?
+                // Since we are inside the 'dice' loop, we have u,v.
+                // Let's compute analytical normals if possible, or fallback to position approximation.
+                // For Sphere at origin: Normal = Normalize(Pos).
+                // For Cylinder: Normal = Normalize(x, y, 0).
+                // For others it varies.
+
+                // To be robust and generic (like REYES), we should compute derivatives dPdu and dPdv
+                // and Cross(dPdu, dPdv).
+                // Let's approximate dPdu and dPdv by sampling a tiny epsilon away.
+                RhFloat eps = 1e-4f;
+
+                // Re-evaluate slightly offset (clamped to domain? ignore domain for derivative check)
+                // Just use the math functions again.
+
+                RhVec3 p_plus_u, p_plus_v;
+
+                 switch (p->type) {
+                    case RH_PRIM_SPHERE:
+                        p_plus_u = evaluate_sphere(p, u + eps, v);
+                        p_plus_v = evaluate_sphere(p, u, v + eps);
+                        break;
+                    case RH_PRIM_CYLINDER:
+                        p_plus_u = evaluate_cylinder(p, u + eps, v);
+                        p_plus_v = evaluate_cylinder(p, u, v + eps);
+                        break;
+                    case RH_PRIM_CONE:
+                        p_plus_u = evaluate_cone(p, u + eps, v);
+                        p_plus_v = evaluate_cone(p, u, v + eps);
+                        break;
+                    case RH_PRIM_PARABOLOID:
+                        p_plus_u = evaluate_paraboloid(p, u + eps, v);
+                        p_plus_v = evaluate_paraboloid(p, u, v + eps);
+                        break;
+                    case RH_PRIM_POLYGON:
+                        p_plus_u = evaluate_polygon(p, u + eps, v);
+                        p_plus_v = evaluate_polygon(p, u, v + eps);
+                        break;
+                    case RH_PRIM_PATCH_BICUBIC:
+                        p_plus_u = evaluate_patch_bicubic(p, u + eps, v);
+                        p_plus_v = evaluate_patch_bicubic(p, u, v + eps);
+                        break;
+                    case RH_PRIM_PATCH_BILINEAR:
+                        p_plus_u = evaluate_patch_bilinear(p, u + eps, v);
+                        p_plus_v = evaluate_patch_bilinear(p, u, v + eps);
+                        break;
+                    case RH_PRIM_DISK:
+                        p_plus_u = evaluate_disk(p, u + eps, v);
+                        p_plus_v = evaluate_disk(p, u, v + eps);
+                        break;
+                    case RH_PRIM_TORUS:
+                        p_plus_u = evaluate_torus(p, u + eps, v);
+                        p_plus_v = evaluate_torus(p, u, v + eps);
+                        break;
+                    case RH_PRIM_HYPERBOLOID:
+                        p_plus_u = evaluate_hyperboloid(p, u + eps, v);
+                        p_plus_v = evaluate_hyperboloid(p, u, v + eps);
+                        break;
+                }
+
+                RhVec3 dPdu = rh_vec3_div(rh_vec3_sub(p_plus_u, pos), eps);
+                RhVec3 dPdv = rh_vec3_div(rh_vec3_sub(p_plus_v, pos), eps);
+
+                norm = rh_vec3_cross(dPdu, dPdv); // Standard: dPdu x dPdv
+
+                // Use analytic normals for primitives where we know the formula
+                // This avoids numerical precision issues with finite differences
+                // (e.g., disk edges can produce wrong-sign normals)
+                if (p->type == RH_PRIM_DISK) {
+                    // Disk normal is always +Z (flat surface, known analytically)
+                    norm = rh_vec3_create(0.0f, 0.0f, 1.0f);
                 } else {
-                    norm = rh_vec3_normalize(norm);
+                    // Check if cross product is degenerate (e.g., at poles of sphere, center of disk)
+                    RhFloat norm_len_sq = norm.x*norm.x + norm.y*norm.y + norm.z*norm.z;
+                    if (norm_len_sq < 1e-8f) {
+                        // Fallback: use analytic normals for known primitives
+                        if (p->type == RH_PRIM_SPHERE) {
+                            // For sphere centered at origin: N = normalize(P)
+                            norm = rh_vec3_normalize(pos);
+                        } else if (p->type == RH_PRIM_CYLINDER) {
+                            // For cylinder along z-axis: N = normalize(x, y, 0)
+                            norm = rh_vec3_normalize(rh_vec3_create(pos.x, pos.y, 0.0f));
+                        } else if (p->type == RH_PRIM_CONE) {
+                            // For cone along z-axis, normal depends on cone angle
+                            norm = rh_vec3_normalize(rh_vec3_create(pos.x, pos.y, 0.0f));
+                        } else if (p->type == RH_PRIM_TORUS) {
+                            // Torus normal points outward from tube center
+                            RhFloat R = p->data.torus.majorradius;
+                            RhFloat theta_rad = u * p->data.torus.theta_max * (RH_PI / 180.0f);
+                            RhVec3 ring_center = rh_vec3_create(R * cosf(theta_rad), R * sinf(theta_rad), 0.0f);
+                            norm = rh_vec3_normalize(rh_vec3_sub(pos, ring_center));
+                        } else {
+                            // Last resort: use any non-zero derivative as normal direction
+                            RhFloat dPdu_len_sq = dPdu.x*dPdu.x + dPdu.y*dPdu.y + dPdu.z*dPdu.z;
+                            RhFloat dPdv_len_sq = dPdv.x*dPdv.x + dPdv.y*dPdv.y + dPdv.z*dPdv.z;
+                            if (dPdv_len_sq > dPdu_len_sq) {
+                                norm = rh_vec3_normalize(dPdv);
+                            } else if (dPdu_len_sq > 1e-8f) {
+                                norm = rh_vec3_normalize(dPdu);
+                            } else {
+                                norm = rh_vec3_create(0.0f, 0.0f, 1.0f); // Default up
+                            }
+                        }
+                    } else {
+                        norm = rh_vec3_normalize(norm);
+                    }
                 }
             }
             
