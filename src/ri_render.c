@@ -231,17 +231,24 @@ void ri_mpoly_list_free(RhMicropolygonList* list) {
 // --- A-Buffer Sample List Functions ---
 
 static void ri_subpixel_list_init(RhSubpixelList* list) {
+    RiContextData* ctx = ri_get_ctx();
     list->samples = NULL;
     list->count = 0;
     list->capacity = 0;
     list->accum_opacity_r = 0.0f;
     list->accum_opacity_g = 0.0f;
     list->accum_opacity_b = 0.0f;
+    list->opaque_z = ctx->far_clip;
 }
 
 static bool ri_subpixel_list_insert(RhSubpixelList* list, float z, RhColor color, RhColor opacity) {
     RiContextData* ctx = ri_get_ctx();
     float othresh = ctx->memory.opacity_threshold;
+
+    // Early reject samples beyond far clip
+    if (z > ctx->far_clip) {
+        return false;
+    }
 
     // Find insertion point (depth-sorted, front to back)
     // We must always find position first before checking visibility,
@@ -285,11 +292,14 @@ static bool ri_subpixel_list_insert(RhSubpixelList* list, float z, RhColor color
     list->samples[insert_pos].opacity = opacity;
     list->count++;
 
-    // Update accumulated opacity
+    // Update accumulated opacity and compute opaque_z
+    // opaque_z is the z value where accumulated opacity first reaches othresh
     list->accum_opacity_r = 0.0f;
     list->accum_opacity_g = 0.0f;
     list->accum_opacity_b = 0.0f;
+    list->opaque_z = ctx->far_clip;  // Default if never reaches threshold
     float trans_r = 1.0f, trans_g = 1.0f, trans_b = 1.0f;
+    bool found_opaque = false;
     for (int i = 0; i < list->count; i++) {
         list->accum_opacity_r += trans_r * list->samples[i].opacity.r;
         list->accum_opacity_g += trans_g * list->samples[i].opacity.g;
@@ -297,6 +307,15 @@ static bool ri_subpixel_list_insert(RhSubpixelList* list, float z, RhColor color
         trans_r *= (1.0f - list->samples[i].opacity.r);
         trans_g *= (1.0f - list->samples[i].opacity.g);
         trans_b *= (1.0f - list->samples[i].opacity.b);
+
+        // Check if we've reached opacity threshold (visibility < 1 - othresh)
+        if (!found_opaque) {
+            float min_trans = fminf(trans_r, fminf(trans_g, trans_b));
+            if (min_trans < (1.0f - othresh)) {
+                list->opaque_z = list->samples[i].z;
+                found_opaque = true;
+            }
+        }
     }
 
     return true;
@@ -323,13 +342,16 @@ static void ri_subpixel_list_composite(const RhSubpixelList* list, RhColor* out_
 }
 
 static void ri_subpixel_list_clear(RhSubpixelList* list) {
+    RiContextData* ctx = ri_get_ctx();
     list->count = 0;
     list->accum_opacity_r = 0.0f;
     list->accum_opacity_g = 0.0f;
     list->accum_opacity_b = 0.0f;
+    list->opaque_z = ctx->far_clip;
 }
 
 static void ri_subpixel_list_free(RhSubpixelList* list) {
+    RiContextData* ctx = ri_get_ctx();
     free(list->samples);
     list->samples = NULL;
     list->count = 0;
@@ -337,6 +359,7 @@ static void ri_subpixel_list_free(RhSubpixelList* list) {
     list->accum_opacity_r = 0.0f;
     list->accum_opacity_g = 0.0f;
     list->accum_opacity_b = 0.0f;
+    list->opaque_z = ctx->far_clip;
 }
 
 static RhBucketSamples* ri_bucket_samples_create(int bucket_width, int bucket_height, int samples_x, int samples_y) {
@@ -388,7 +411,7 @@ static RhSubpixelList* ri_bucket_samples_get(RhBucketSamples* bs, int bucket_x, 
 
 // --- Hierarchical Z-Buffer Functions ---
 
-static RhHiZBuffer* ri_hiz_create(int width, int height, int offset_x, int offset_y) {
+static RhHiZBuffer* ri_hiz_create(int width, int height, int offset_x, int offset_y, float far_clip) {
     RhHiZBuffer* hiz = (RhHiZBuffer*)malloc(sizeof(RhHiZBuffer));
     if (!hiz) return NULL;
 
@@ -405,9 +428,9 @@ static RhHiZBuffer* ri_hiz_create(int width, int height, int offset_x, int offse
         hiz->height[level] = h > 0 ? h : 1;
         hiz->levels[level] = (float*)malloc(hiz->width[level] * hiz->height[level] * sizeof(float));
 
-        // Initialize to max depth (far plane)
+        // Initialize to far clip distance
         for (int i = 0; i < hiz->width[level] * hiz->height[level]; i++) {
-            hiz->levels[level][i] = 1e30f;
+            hiz->levels[level][i] = far_clip;
         }
 
         hiz->num_levels++;
@@ -429,6 +452,8 @@ static void ri_hiz_destroy(RhHiZBuffer* hiz) {
 
 // Update Hi-Z after writing a pixel at (x, y) with depth z
 // x, y are in screen coordinates (not bucket-local)
+// NOTE: This function is no longer used - Hi-Z is now updated from A-buffer opaque_z
+__attribute__((unused))
 static void ri_hiz_update(RhHiZBuffer* hiz, int x, int y, float z) {
     if (!hiz) return;
 
@@ -468,10 +493,9 @@ static bool ri_hiz_test_occluded(RhHiZBuffer* hiz, int min_x, int min_y,
     // If region is entirely outside bucket, it's not occluded by THIS bucket
     if (lmin_x > lmax_x || lmin_y > lmax_y) return false;
 
-    // Simple approach: always use level 0 (raw Z values)
-    // Level 0 stores min (closest) z at each pixel.
-    // For a grid to be fully occluded, its min_depth must be > ALL z values in its bbox.
-    // So we find the maximum z in the region - if min_depth > max_z, grid is occluded.
+    // Level 0 stores opaque_z at each pixel (the z where accumulated opacity >= othresh).
+    // A grid is fully occluded only if its min_depth > ALL opaque_z values in its bbox.
+    // So we find the maximum opaque_z in the region - if min_depth > max_opaque_z, grid is occluded.
     float max_hiz_depth = -1e30f;
     for (int cy = lmin_y; cy <= lmax_y; cy++) {
         for (int cx = lmin_x; cx <= lmax_x; cx++) {
@@ -485,9 +509,68 @@ static bool ri_hiz_test_occluded(RhHiZBuffer* hiz, int min_x, int min_y,
 
     // Grid is occluded if its closest point is farther than ALL Hi-Z values.
     // Use an epsilon to avoid culling coplanar surfaces due to floating point precision.
-    // The epsilon is relative to the depth range to handle different scene scales.
-    float epsilon = 0.01f;  // 1% tolerance
+    // The epsilon is proportional to depth to handle different scene scales.
+    // Use 5% to handle adjacent polygons on meshes that share edges at similar depths,
+    // accounting for the timing mismatch between queued mpolys and grid processing.
+    float epsilon = max_hiz_depth * 0.05f;   // 5% of depth
+    if (epsilon < 0.5f) epsilon = 0.5f;      // Minimum epsilon for near geometry
     return min_depth > max_hiz_depth + epsilon;
+}
+
+// Update Hi-Z buffer from A-buffer opaque_z values for a micropolygon's pixel region
+// This should be called after each micropolygon is rasterized
+// min_x, min_y, max_x, max_y are the micropolygon's screen-space bounding box
+// clip_min_x, clip_min_y are the bucket's screen-space origin
+// NOTE: Currently unused - Hi-Z updates within a bucket cause incorrect culling
+// of adjacent items at similar depths. May be re-enabled for inter-bucket culling.
+__attribute__((unused))
+static void ri_hiz_update_from_abuffer(RhHiZBuffer* hiz, RhBucketSamples* bs,
+                                        int min_x, int min_y, int max_x, int max_y,
+                                        int clip_min_x, int clip_min_y,
+                                        int clip_max_x, int clip_max_y) {
+    if (!hiz || !bs) return;
+
+    // Clamp micropolygon bounds to bucket bounds
+    int x0 = (min_x < clip_min_x) ? clip_min_x : min_x;
+    int y0 = (min_y < clip_min_y) ? clip_min_y : min_y;
+    int x1 = (max_x > clip_max_x) ? clip_max_x : max_x;
+    int y1 = (max_y > clip_max_y) ? clip_max_y : max_y;
+
+    if (x0 > x1 || y0 > y1) return;
+
+    int bucket_w = clip_max_x - clip_min_x + 1;
+
+    // For each pixel in the micropolygon's bounding box, update Hi-Z from A-buffer
+    for (int y = y0; y <= y1; y++) {
+        for (int x = x0; x <= x1; x++) {
+            int local_x = x - clip_min_x;
+            int local_y = y - clip_min_y;
+
+            // Find MAX opaque_z across all subpixel lists for this pixel
+            float max_opaque_z = -1e30f;
+            for (int sy = 0; sy < bs->samples_y; sy++) {
+                for (int sx = 0; sx < bs->samples_x; sx++) {
+                    int list_idx = ((local_y * bucket_w + local_x) * bs->samples_y + sy)
+                                   * bs->samples_x + sx;
+                    if (list_idx >= 0 && list_idx < bs->num_lists) {
+                        RhSubpixelList* list = &bs->lists[list_idx];
+                        if (list->opaque_z > max_opaque_z) {
+                            max_opaque_z = list->opaque_z;
+                        }
+                    }
+                }
+            }
+
+            // Update Hi-Z for this pixel
+            int hiz_x = x - hiz->base_offset_x;
+            int hiz_y = y - hiz->base_offset_y;
+            if (hiz_x >= 0 && hiz_x < hiz->width[0] &&
+                hiz_y >= 0 && hiz_y < hiz->height[0]) {
+                int idx = hiz_y * hiz->width[0] + hiz_x;
+                hiz->levels[0][idx] = max_opaque_z;
+            }
+        }
+    }
 }
 
 // --- Front-to-Back Sorting Comparison ---
@@ -896,18 +979,13 @@ static void ri_sample_mpoly(
                         final_opacity.b = w0 * mpoly->o[0].b + w1 * mpoly->o[1].b + w2 * mpoly->o[3].b;
                     }
 
-                    // Update zbuffer for depth tracking
-                    // For shadow maps: always update (all geometry casts shadows)
-                    // For visual rendering: only update for opaque samples to avoid
-                    // incorrectly culling geometry behind transparent surfaces
-                    int idx = y * r->width + x;
-                    bool is_opaque = (final_opacity.r >= 0.99f &&
-                                      final_opacity.g >= 0.99f &&
-                                      final_opacity.b >= 0.99f);
-                    bool update_zbuffer = (ctx->display_mode == RH_DISPLAY_Z) || is_opaque;
-                    if (update_zbuffer && z < r->zbuffer[idx]) {
-                        r->zbuffer[idx] = z;
-                        ri_hiz_update(ctx->bucket_hiz, x, y, z);
+                    // Update zbuffer for shadow map depth tracking only
+                    // Hi-Z is now updated from A-buffer opaque_z after each micropolygon
+                    if (ctx->display_mode == RH_DISPLAY_Z) {
+                        int idx = y * r->width + x;
+                        if (z < r->zbuffer[idx]) {
+                            r->zbuffer[idx] = z;
+                        }
                     }
 
                     // Insert into A-buffer for proper transparency compositing
@@ -962,18 +1040,13 @@ static void ri_sample_mpoly(
                         final_opacity.b = u0 * mpoly->o[1].b + u1 * mpoly->o[2].b + u2 * mpoly->o[3].b;
                     }
 
-                    // Update zbuffer for depth tracking
-                    // For shadow maps: always update (all geometry casts shadows)
-                    // For visual rendering: only update for opaque samples to avoid
-                    // incorrectly culling geometry behind transparent surfaces
-                    int idx = y * r->width + x;
-                    bool is_opaque = (final_opacity.r >= 0.99f &&
-                                      final_opacity.g >= 0.99f &&
-                                      final_opacity.b >= 0.99f);
-                    bool update_zbuffer = (ctx->display_mode == RH_DISPLAY_Z) || is_opaque;
-                    if (update_zbuffer && z < r->zbuffer[idx]) {
-                        r->zbuffer[idx] = z;
-                        ri_hiz_update(ctx->bucket_hiz, x, y, z);
+                    // Update zbuffer for shadow map depth tracking only
+                    // Hi-Z is now updated from A-buffer opaque_z after each micropolygon
+                    if (ctx->display_mode == RH_DISPLAY_Z) {
+                        int idx = y * r->width + x;
+                        if (z < r->zbuffer[idx]) {
+                            r->zbuffer[idx] = z;
+                        }
                     }
 
                     // Insert into A-buffer for proper transparency compositing
@@ -1435,13 +1508,18 @@ void RiWorldEnd(void) {
             // Create Hi-Z buffer for this bucket
             int bucket_width = clip_max_x - clip_min_x + 1;
             int bucket_height = clip_max_y - clip_min_y + 1;
-            ctx->bucket_hiz = ri_hiz_create(bucket_width, bucket_height, clip_min_x, clip_min_y);
+            ctx->bucket_hiz = ri_hiz_create(bucket_width, bucket_height, clip_min_x, clip_min_y, ctx->far_clip);
 
             // Create A-buffer for transparency compositing
             ctx->bucket_samples = ri_bucket_samples_create(bucket_width, bucket_height, 1, 1);
 
+            // Rasterize queued micropolygons from previous buckets
+            // NOTE: Don't update Hi-Z here - queued mpolys may be from items that share
+            // edges with items in this bucket, causing incorrect culling of adjacent faces.
+            // Hi-Z will be updated after this bucket's items are processed.
             for (int qi = 0; qi < b->queued.count; qi++) {
-                ri_sample_mpoly(ctx->raster, &b->queued.data[qi],
+                RhMicropolygon* qmpoly = &b->queued.data[qi];
+                ri_sample_mpoly(ctx->raster, qmpoly,
                                clip_min_x, clip_min_y, clip_max_x, clip_max_y, mode);
             }
             ri_mpoly_list_clear(&b->queued);
@@ -1480,6 +1558,8 @@ void RiWorldEnd(void) {
                                 if (mby == by && mbx == bx) {
                                     ri_sample_mpoly(ctx->raster, mpoly,
                                                    clip_min_x, clip_min_y, clip_max_x, clip_max_y, mode);
+                                    // NOTE: Hi-Z update deferred - updating here causes incorrect
+                                    // culling of adjacent items at similar depths within same bucket
                                 } else if (mby > by || (mby == by && mbx > bx)) {
                                     RhBucket* later = &ctx->buckets[mby * ctx->num_buckets_x + mbx];
                                     ri_mpoly_list_push(&later->queued, mpoly);

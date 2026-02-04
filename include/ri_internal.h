@@ -165,6 +165,7 @@ typedef struct {
     float accum_opacity_r;  // Accumulated opacity for early culling
     float accum_opacity_g;
     float accum_opacity_b;
+    float opaque_z;         // Z where accumulated opacity >= othresh (for Hi-Z culling)
 } RhSubpixelList;
 
 typedef struct {

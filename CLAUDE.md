@@ -61,6 +61,7 @@ RenderMan API calls → Graphics State Stack → Scene Collection (WorldBegin/En
 - **Light struct synchronization**: `RhLight_ShaderView` in `rh_shader.c` must exactly match `RhLight` in `ri.c` (including the `transform` field) or array indexing will be corrupted
 - **Polygon normals**: Computed via finite differences; vertex winding order affects normal direction
 - **Sphere pole normals**: Finite difference method degenerates at poles; fallback to analytic normal `N = normalize(P)`
+- **Hi-Z occlusion culling**: Currently disabled due to incorrect culling of adjacent polygons at similar depths. The infrastructure exists (A-buffer tracks `opaque_z` per subpixel list) but Hi-Z updates are not performed during bucket processing. See `docs/HIZ_CULLING_NOTES.md` for detailed analysis and potential future solutions.
 
 ## Coordinate System
 
@@ -81,3 +82,11 @@ When setting up camera transforms before `WorldBegin`:
 - `PARTI.md` - RenderMan Interface Specification v3.1 (reference for API behavior)
 - `FSD.md` - Functional System Description with design details
 - `PLAN.md` - Development roadmap for RISpec compliance
+
+## Testing Notes
+
+- The directory `tests` contains a bunch of test cases.
+- `make test` will run the tests, indicating failures and successes.
+- `make generate-refs` should rebuild the images for comparison.
+- Do not run `make generate-refs` yourself: always ask the user if you should do it.
+- the "random" and "randomgrid" tests are expected to fail.

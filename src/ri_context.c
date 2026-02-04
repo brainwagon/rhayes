@@ -122,8 +122,9 @@ void RiBegin(RtToken name) {
     g_ctx->item_pool.pool_hits = 0;
     g_ctx->item_pool.pool_misses = 0;
 
-    // Default near clip distance
+    // Default clip distances
     g_ctx->near_clip = 0.1f;
+    g_ctx->far_clip = 1e30f;
 
     (void)name;
 }
