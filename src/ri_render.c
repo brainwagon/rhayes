@@ -118,6 +118,7 @@ RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* transfor
     item->motion_t0 = ctx->motion_times[0];
     item->motion_t1 = ctx->motion_times[1];
     item->color = *color;
+    item->opacity = ri_curr()->opacity;
     item->shader = ri_curr()->current_surface_shader;
     item->shader_params = ri_curr()->current_shader_params;
     item->shading_rate = ri_curr()->shading_rate;
@@ -229,7 +230,6 @@ void ri_mpoly_list_free(RhMicropolygonList* list) {
 
 // --- A-Buffer Sample List Functions ---
 
-__attribute__((unused))
 static void ri_subpixel_list_init(RhSubpixelList* list) {
     list->samples = NULL;
     list->count = 0;
@@ -239,19 +239,13 @@ static void ri_subpixel_list_init(RhSubpixelList* list) {
     list->accum_opacity_b = 0.0f;
 }
 
-__attribute__((unused))
 static bool ri_subpixel_list_insert(RhSubpixelList* list, float z, RhColor color, RhColor opacity) {
     RiContextData* ctx = ri_get_ctx();
     float othresh = ctx->memory.opacity_threshold;
 
-    // Early visibility culling: if this subpixel is already fully opaque, skip
-    if (list->accum_opacity_r >= othresh &&
-        list->accum_opacity_g >= othresh &&
-        list->accum_opacity_b >= othresh) {
-        return false;
-    }
-
     // Find insertion point (depth-sorted, front to back)
+    // We must always find position first before checking visibility,
+    // since the new sample might be closer than existing samples
     int insert_pos = list->count;
     for (int i = 0; i < list->count; i++) {
         if (z < list->samples[i].z) {
@@ -268,7 +262,7 @@ static bool ri_subpixel_list_insert(RhSubpixelList* list, float z, RhColor color
         vis_b *= (1.0f - list->samples[i].opacity.b);
     }
 
-    // If this sample would be invisible, don't insert it
+    // If this sample would be invisible (fully occluded by samples in front), don't insert it
     float min_vis = fminf(vis_r, fminf(vis_g, vis_b));
     if (min_vis < (1.0f - othresh)) {
         return false;
@@ -308,7 +302,6 @@ static bool ri_subpixel_list_insert(RhSubpixelList* list, float z, RhColor color
     return true;
 }
 
-__attribute__((unused))
 static void ri_subpixel_list_composite(const RhSubpixelList* list, RhColor* out_color, RhColor* out_opacity) {
     RhColor color = {0.0f, 0.0f, 0.0f};
     float trans_r = 1.0f, trans_g = 1.0f, trans_b = 1.0f;
@@ -346,7 +339,6 @@ static void ri_subpixel_list_free(RhSubpixelList* list) {
     list->accum_opacity_b = 0.0f;
 }
 
-__attribute__((unused))
 static RhBucketSamples* ri_bucket_samples_create(int bucket_width, int bucket_height, int samples_x, int samples_y) {
     RhBucketSamples* bs = (RhBucketSamples*)malloc(sizeof(RhBucketSamples));
     bs->bucket_width = bucket_width;
@@ -368,7 +360,6 @@ static void ri_bucket_samples_clear(RhBucketSamples* bs) {
     }
 }
 
-__attribute__((unused))
 static void ri_bucket_samples_destroy(RhBucketSamples* bs) {
     if (bs) {
         for (int i = 0; i < bs->num_lists; i++) {
@@ -890,31 +881,47 @@ static void ri_sample_mpoly(
 
                     float z = w0 * v0.z + w1 * v1.z + w2 * v3.z;
 
+                    RhColor final_color;
+                    RhColor final_opacity;
+                    if (mode == RH_SHADE_CENTER) {
+                        final_color = mpoly->center;
+                        final_opacity = mpoly->center_opacity;
+                    } else {
+                        final_color.r = w0 * mpoly->c[0].r + w1 * mpoly->c[1].r + w2 * mpoly->c[3].r;
+                        final_color.g = w0 * mpoly->c[0].g + w1 * mpoly->c[1].g + w2 * mpoly->c[3].g;
+                        final_color.b = w0 * mpoly->c[0].b + w1 * mpoly->c[1].b + w2 * mpoly->c[3].b;
+
+                        final_opacity.r = w0 * mpoly->o[0].r + w1 * mpoly->o[1].r + w2 * mpoly->o[3].r;
+                        final_opacity.g = w0 * mpoly->o[0].g + w1 * mpoly->o[1].g + w2 * mpoly->o[3].g;
+                        final_opacity.b = w0 * mpoly->o[0].b + w1 * mpoly->o[1].b + w2 * mpoly->o[3].b;
+                    }
+
+                    // Always update zbuffer for depth tracking (needed for shadow maps)
                     int idx = y * r->width + x;
                     if (z < r->zbuffer[idx]) {
                         r->zbuffer[idx] = z;
-
-                        // Update Hi-Z buffer
                         ri_hiz_update(ctx->bucket_hiz, x, y, z);
-
-                        RhColor final_color;
-                        RhColor final_opacity;
-                        if (mode == RH_SHADE_CENTER) {
-                            final_color = mpoly->center;
-                            final_opacity = mpoly->center_opacity;
-                        } else {
-                            final_color.r = w0 * mpoly->c[0].r + w1 * mpoly->c[1].r + w2 * mpoly->c[3].r;
-                            final_color.g = w0 * mpoly->c[0].g + w1 * mpoly->c[1].g + w2 * mpoly->c[3].g;
-                            final_color.b = w0 * mpoly->c[0].b + w1 * mpoly->c[1].b + w2 * mpoly->c[3].b;
-
-                            final_opacity.r = w0 * mpoly->o[0].r + w1 * mpoly->o[1].r + w2 * mpoly->o[3].r;
-                            final_opacity.g = w0 * mpoly->o[0].g + w1 * mpoly->o[1].g + w2 * mpoly->o[3].g;
-                            final_opacity.b = w0 * mpoly->o[0].b + w1 * mpoly->o[1].b + w2 * mpoly->o[3].b;
-                        }
-
-                        rh_image_set_pixel_with_opacity(r->image, x, y, final_color, final_opacity);
-                        drawn = true;
                     }
+
+                    // Insert into A-buffer for proper transparency compositing
+                    if (ctx->bucket_samples) {
+                        // Get subpixel list for this pixel
+                        int local_x = x - clip_min_x;
+                        int local_y = y - clip_min_y;
+                        int bucket_w = clip_max_x - clip_min_x + 1;
+                        int bucket_h = clip_max_y - clip_min_y + 1;
+                        if (local_x >= 0 && local_x < bucket_w &&
+                            local_y >= 0 && local_y < bucket_h) {
+                            int list_idx = local_y * bucket_w + local_x;
+                            RhSubpixelList* list = &ctx->bucket_samples->lists[list_idx];
+                            // Note: final_color (Ci) is already premultiplied by shaders
+                            ri_subpixel_list_insert(list, z, final_color, final_opacity);
+                        }
+                    } else {
+                        // Direct framebuffer write (no A-buffer)
+                        rh_image_set_pixel_with_opacity(r->image, x, y, final_color, final_opacity);
+                    }
+                    drawn = true;
                 }
             }
 
@@ -933,28 +940,42 @@ static void ri_sample_mpoly(
 
                     float z = u0 * v1.z + u1 * v2.z + u2 * v3.z;
 
+                    RhColor final_color;
+                    RhColor final_opacity;
+                    if (mode == RH_SHADE_CENTER) {
+                        final_color = mpoly->center;
+                        final_opacity = mpoly->center_opacity;
+                    } else {
+                        final_color.r = u0 * mpoly->c[1].r + u1 * mpoly->c[2].r + u2 * mpoly->c[3].r;
+                        final_color.g = u0 * mpoly->c[1].g + u1 * mpoly->c[2].g + u2 * mpoly->c[3].g;
+                        final_color.b = u0 * mpoly->c[1].b + u1 * mpoly->c[2].b + u2 * mpoly->c[3].b;
+
+                        final_opacity.r = u0 * mpoly->o[1].r + u1 * mpoly->o[2].r + u2 * mpoly->o[3].r;
+                        final_opacity.g = u0 * mpoly->o[1].g + u1 * mpoly->o[2].g + u2 * mpoly->o[3].g;
+                        final_opacity.b = u0 * mpoly->o[1].b + u1 * mpoly->o[2].b + u2 * mpoly->o[3].b;
+                    }
+
+                    // Always update zbuffer for depth tracking (needed for shadow maps)
                     int idx = y * r->width + x;
                     if (z < r->zbuffer[idx]) {
                         r->zbuffer[idx] = z;
-
-                        // Update Hi-Z buffer
                         ri_hiz_update(ctx->bucket_hiz, x, y, z);
+                    }
 
-                        RhColor final_color;
-                        RhColor final_opacity;
-                        if (mode == RH_SHADE_CENTER) {
-                            final_color = mpoly->center;
-                            final_opacity = mpoly->center_opacity;
-                        } else {
-                            final_color.r = u0 * mpoly->c[1].r + u1 * mpoly->c[2].r + u2 * mpoly->c[3].r;
-                            final_color.g = u0 * mpoly->c[1].g + u1 * mpoly->c[2].g + u2 * mpoly->c[3].g;
-                            final_color.b = u0 * mpoly->c[1].b + u1 * mpoly->c[2].b + u2 * mpoly->c[3].b;
-
-                            final_opacity.r = u0 * mpoly->o[1].r + u1 * mpoly->o[2].r + u2 * mpoly->o[3].r;
-                            final_opacity.g = u0 * mpoly->o[1].g + u1 * mpoly->o[2].g + u2 * mpoly->o[3].g;
-                            final_opacity.b = u0 * mpoly->o[1].b + u1 * mpoly->o[2].b + u2 * mpoly->o[3].b;
+                    // Insert into A-buffer for proper transparency compositing
+                    if (ctx->bucket_samples) {
+                        int local_x = x - clip_min_x;
+                        int local_y = y - clip_min_y;
+                        int bucket_w = clip_max_x - clip_min_x + 1;
+                        if (local_x >= 0 && local_x < bucket_w &&
+                            local_y >= 0 && local_y < (clip_max_y - clip_min_y + 1)) {
+                            int list_idx = local_y * bucket_w + local_x;
+                            RhSubpixelList* list = &ctx->bucket_samples->lists[list_idx];
+                            // Note: final_color (Ci) is already premultiplied by shaders
+                            ri_subpixel_list_insert(list, z, final_color, final_opacity);
                         }
-
+                    } else {
+                        // Direct framebuffer write (no A-buffer)
                         rh_image_set_pixel_with_opacity(r->image, x, y, final_color, final_opacity);
                     }
                 }
@@ -1265,7 +1286,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             shctx.N = cam_normals[i];
             shctx.I = cam_positions[i];
             shctx.Cs = cur_col;
-            shctx.Os = (RhColor){1,1,1};
+            shctx.Os = item->opacity;
             shctx.light_list = cam_lights;
             shctx.num_lights = ctx->num_lights;
             shctx.grid_ptr = (void*)(intptr_t)(ctx->grid_counter);
@@ -1402,6 +1423,9 @@ void RiWorldEnd(void) {
             int bucket_height = clip_max_y - clip_min_y + 1;
             ctx->bucket_hiz = ri_hiz_create(bucket_width, bucket_height, clip_min_x, clip_min_y);
 
+            // Create A-buffer for transparency compositing
+            ctx->bucket_samples = ri_bucket_samples_create(bucket_width, bucket_height, 1, 1);
+
             for (int qi = 0; qi < b->queued.count; qi++) {
                 ri_sample_mpoly(ctx->raster, &b->queued.data[qi],
                                clip_min_x, clip_min_y, clip_max_x, clip_max_y, mode);
@@ -1468,6 +1492,26 @@ void RiWorldEnd(void) {
             // Update progress bar
             if (ctx->show_progress) {
                 ri_print_progress(ctx->stats.buckets_processed, total_buckets, ctx->render_start_time);
+            }
+
+            // Composite A-buffer samples to framebuffer
+            if (ctx->bucket_samples) {
+                for (int py = 0; py < bucket_height; py++) {
+                    for (int px = 0; px < bucket_width; px++) {
+                        int list_idx = py * bucket_width + px;
+                        RhSubpixelList* list = &ctx->bucket_samples->lists[list_idx];
+                        if (list->count > 0) {
+                            RhColor comp_color, comp_opacity;
+                            ri_subpixel_list_composite(list, &comp_color, &comp_opacity);
+                            int screen_x = clip_min_x + px;
+                            int screen_y = clip_min_y + py;
+                            rh_image_set_pixel_with_opacity(ctx->raster->image, screen_x, screen_y,
+                                                           comp_color, comp_opacity);
+                        }
+                    }
+                }
+                ri_bucket_samples_destroy(ctx->bucket_samples);
+                ctx->bucket_samples = NULL;
             }
 
             // Destroy Hi-Z buffer for this bucket

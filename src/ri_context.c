@@ -48,6 +48,7 @@ void RiBegin(RtToken name) {
     g_ctx->stack[0].transform_t1 = rh_mat4_identity();
     g_ctx->stack[0].has_motion = false;
     g_ctx->stack[0].color = (RhColor){1.0f, 1.0f, 1.0f};
+    g_ctx->stack[0].opacity = (RhColor){1.0f, 1.0f, 1.0f};
 
     // Default Basis (Bezier)
     RhMat4 bezier_m;

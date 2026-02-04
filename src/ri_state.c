@@ -257,8 +257,11 @@ void RiColor(RtColor color) {
 }
 
 void RiOpacity(RtColor color) {
-    // Not implemented in rasterizer yet
-    (void)color;
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    ri_curr()->opacity.r = color[0];
+    ri_curr()->opacity.g = color[1];
+    ri_curr()->opacity.b = color[2];
 }
 
 void RiShadingRate(RtFloat size) {

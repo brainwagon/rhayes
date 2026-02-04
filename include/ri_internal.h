@@ -55,6 +55,7 @@ typedef struct {
     RhMat4 transform_t1; // Transform at t1 for motion blur
     bool has_motion;     // True if transform differs from transform_t1
     RhColor color;
+    RhColor opacity;     // Surface opacity (default: {1,1,1} = fully opaque)
 
     // Basis
     RhMat4 u_basis;
@@ -92,6 +93,7 @@ typedef struct {
     float motion_t0;     // Time value for transform (from MotionBegin)
     float motion_t1;     // Time value for transform_t1 (from MotionBegin)
     RhColor color;
+    RhColor opacity;     // Surface opacity captured at primitive creation
     RhShaderFunc shader;
     void* shader_params;
     float shading_rate;  // Captured from attribute state
