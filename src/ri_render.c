@@ -896,9 +896,16 @@ static void ri_sample_mpoly(
                         final_opacity.b = w0 * mpoly->o[0].b + w1 * mpoly->o[1].b + w2 * mpoly->o[3].b;
                     }
 
-                    // Always update zbuffer for depth tracking (needed for shadow maps)
+                    // Update zbuffer for depth tracking
+                    // For shadow maps: always update (all geometry casts shadows)
+                    // For visual rendering: only update for opaque samples to avoid
+                    // incorrectly culling geometry behind transparent surfaces
                     int idx = y * r->width + x;
-                    if (z < r->zbuffer[idx]) {
+                    bool is_opaque = (final_opacity.r >= 0.99f &&
+                                      final_opacity.g >= 0.99f &&
+                                      final_opacity.b >= 0.99f);
+                    bool update_zbuffer = (ctx->display_mode == RH_DISPLAY_Z) || is_opaque;
+                    if (update_zbuffer && z < r->zbuffer[idx]) {
                         r->zbuffer[idx] = z;
                         ri_hiz_update(ctx->bucket_hiz, x, y, z);
                     }
@@ -955,9 +962,16 @@ static void ri_sample_mpoly(
                         final_opacity.b = u0 * mpoly->o[1].b + u1 * mpoly->o[2].b + u2 * mpoly->o[3].b;
                     }
 
-                    // Always update zbuffer for depth tracking (needed for shadow maps)
+                    // Update zbuffer for depth tracking
+                    // For shadow maps: always update (all geometry casts shadows)
+                    // For visual rendering: only update for opaque samples to avoid
+                    // incorrectly culling geometry behind transparent surfaces
                     int idx = y * r->width + x;
-                    if (z < r->zbuffer[idx]) {
+                    bool is_opaque = (final_opacity.r >= 0.99f &&
+                                      final_opacity.g >= 0.99f &&
+                                      final_opacity.b >= 0.99f);
+                    bool update_zbuffer = (ctx->display_mode == RH_DISPLAY_Z) || is_opaque;
+                    if (update_zbuffer && z < r->zbuffer[idx]) {
                         r->zbuffer[idx] = z;
                         ri_hiz_update(ctx->bucket_hiz, x, y, z);
                     }
