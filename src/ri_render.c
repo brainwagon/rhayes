@@ -467,6 +467,40 @@ static void ri_hiz_update(RhHiZBuffer* hiz, int x, int y, float z) {
     int idx = ly * hiz->width[0] + lx;
     if (z < hiz->levels[0][idx]) {
         hiz->levels[0][idx] = z;
+
+        // Propagate up the pyramid (MAX-pooling)
+        // Level i+1 stores the MAX of 2x2 area in Level i.
+        // This is conservative for occlusion testing: if a grid is behind the MAX, 
+        // it is behind everything in that 2x2 area.
+        int clx = lx;
+        int cly = ly;
+        for (int level = 0; level < hiz->num_levels - 1; level++) {
+            int px = clx / 2;
+            int py = cly / 2;
+            int next_w = hiz->width[level + 1];
+            int next_idx = py * next_w + px;
+
+            // Find max of 2x2 block in current level
+            float m = -1e30f;
+            int start_x = px * 2;
+            int start_y = py * 2;
+            int curr_w = hiz->width[level];
+            for (int dy = 0; dy < 2; dy++) {
+                for (int dx = 0; dx < 2; dx++) {
+                    int cx = start_x + dx;
+                    int cy = start_y + dy;
+                    if (cx < hiz->width[level] && cy < hiz->height[level]) {
+                        float val = hiz->levels[level][cy * curr_w + cx];
+                        if (val > m) m = val;
+                    }
+                }
+            }
+
+            if (hiz->levels[level + 1][next_idx] == m) break; // No change
+            hiz->levels[level + 1][next_idx] = m;
+            clx = px;
+            cly = py;
+        }
     }
 }
 
@@ -478,42 +512,56 @@ static bool ri_hiz_test_occluded(RhHiZBuffer* hiz, int min_x, int min_y,
                                   int max_x, int max_y, float min_depth) {
     if (!hiz) return false;
 
-    // Convert to bucket-local coordinates
+    // Convert to absolute coordinates within the buffer
     int lmin_x = min_x - hiz->base_offset_x;
     int lmin_y = min_y - hiz->base_offset_y;
     int lmax_x = max_x - hiz->base_offset_x;
     int lmax_y = max_y - hiz->base_offset_y;
 
-    // Clamp to bucket bounds (level 0 = raw Z-buffer)
+    // Clamp to level 0 (full resolution) bounds
     if (lmin_x < 0) lmin_x = 0;
     if (lmin_y < 0) lmin_y = 0;
     if (lmax_x >= hiz->width[0]) lmax_x = hiz->width[0] - 1;
     if (lmax_y >= hiz->height[0]) lmax_y = hiz->height[0] - 1;
 
-    // If region is entirely outside bucket, it's not occluded by THIS bucket
+    // If region is entirely outside, it's not occluded
     if (lmin_x > lmax_x || lmin_y > lmax_y) return false;
 
-    // Level 0 stores opaque_z at each pixel (the z where accumulated opacity >= othresh).
-    // A grid is fully occluded only if its min_depth > ALL opaque_z values in its bbox.
-    // So we find the maximum opaque_z in the region - if min_depth > max_opaque_z, grid is occluded.
+    // Choose the best pyramid level based on the region size.
+    // We want a level where the region covers a small number of tiles (typically 1-4).
+    int w = lmax_x - lmin_x + 1;
+    int h = lmax_y - lmin_y + 1;
+    int size = (w > h) ? w : h;
+    
+    int level = 0;
+    while (level < hiz->num_levels - 1 && (1 << (level + 1)) <= size) {
+        level++;
+    }
+    
+    // Map bounding box to the chosen pyramid level
+    int level_min_x = lmin_x >> level;
+    int level_max_x = lmax_x >> level;
+    int level_min_y = lmin_y >> level;
+    int level_max_y = lmax_y >> level;
+    
     float max_hiz_depth = -1e30f;
-    for (int cy = lmin_y; cy <= lmax_y; cy++) {
-        for (int cx = lmin_x; cx <= lmax_x; cx++) {
-            int idx = cy * hiz->width[0] + cx;
-            float val = hiz->levels[0][idx];
-            if (val > max_hiz_depth) {
-                max_hiz_depth = val;
+    int curr_w = hiz->width[level];
+    for (int cy = level_min_y; cy <= level_max_y; cy++) {
+        for (int cx = level_min_x; cx <= level_max_x; cx++) {
+            if (cx < hiz->width[level] && cy < hiz->height[level]) {
+                float val = hiz->levels[level][cy * curr_w + cx];
+                if (val > max_hiz_depth) {
+                    max_hiz_depth = val;
+                }
             }
         }
     }
 
-    // Grid is occluded if its closest point is farther than ALL Hi-Z values.
-    // Use an epsilon to avoid culling coplanar surfaces due to floating point precision.
-    // The epsilon is proportional to depth to handle different scene scales.
-    // Use 5% to handle adjacent polygons on meshes that share edges at similar depths,
-    // accounting for the timing mismatch between queued mpolys and grid processing.
-    float epsilon = max_hiz_depth * 0.05f;   // 5% of depth
-    if (epsilon < 0.5f) epsilon = 0.5f;      // Minimum epsilon for near geometry
+    // Grid is fully occluded only if its min_depth is greater than ALL occluder depths.
+    // Grid is fully occluded only if its min_depth is greater than ALL occluder depths.
+    // We use a small epsilon to handle precision issues at polygon edges.
+    float epsilon = max_hiz_depth * 0.001f;   // 0.1% of depth
+    if (epsilon < 0.1f) epsilon = 0.1f;      // Minimum epsilon for near geometry
     return min_depth > max_hiz_depth + epsilon;
 }
 
@@ -523,7 +571,6 @@ static bool ri_hiz_test_occluded(RhHiZBuffer* hiz, int min_x, int min_y,
 // clip_min_x, clip_min_y are the bucket's screen-space origin
 // NOTE: Currently unused - Hi-Z updates within a bucket cause incorrect culling
 // of adjacent items at similar depths. May be re-enabled for inter-bucket culling.
-__attribute__((unused))
 static void ri_hiz_update_from_abuffer(RhHiZBuffer* hiz, RhBucketSamples* bs,
                                         int min_x, int min_y, int max_x, int max_y,
                                         int clip_min_x, int clip_min_y,
@@ -540,13 +587,15 @@ static void ri_hiz_update_from_abuffer(RhHiZBuffer* hiz, RhBucketSamples* bs,
 
     int bucket_w = clip_max_x - clip_min_x + 1;
 
-    // For each pixel in the micropolygon's bounding box, update Hi-Z from A-buffer
+    // For each pixel in the micropolygon's bounding box, update Hi-Z Level 0 from A-buffer
     for (int y = y0; y <= y1; y++) {
         for (int x = x0; x <= x1; x++) {
             int local_x = x - clip_min_x;
             int local_y = y - clip_min_y;
 
-            // Find MAX opaque_z across all subpixel lists for this pixel
+            // Find MAX opaque_z across all subpixel lists for this pixel.
+            // If any subpixel is NOT opaque, max_opaque_z will be far_clip, 
+            // preventing incorrect culling of partially covered pixels.
             float max_opaque_z = -1e30f;
             for (int sy = 0; sy < bs->samples_y; sy++) {
                 for (int sx = 0; sx < bs->samples_x; sx++) {
@@ -561,15 +610,54 @@ static void ri_hiz_update_from_abuffer(RhHiZBuffer* hiz, RhBucketSamples* bs,
                 }
             }
 
-            // Update Hi-Z for this pixel
+            // Update Hi-Z Level 0 for this pixel
             int hiz_x = x - hiz->base_offset_x;
             int hiz_y = y - hiz->base_offset_y;
             if (hiz_x >= 0 && hiz_x < hiz->width[0] &&
                 hiz_y >= 0 && hiz_y < hiz->height[0]) {
                 int idx = hiz_y * hiz->width[0] + hiz_x;
-                hiz->levels[0][idx] = max_opaque_z;
+                // Only update if the new occluder is closer than existing
+                if (max_opaque_z < hiz->levels[0][idx]) {
+                    hiz->levels[0][idx] = max_opaque_z;
+                }
             }
         }
+    }
+
+    // Propagate Level 0 updates up the pyramid (MAX-pooling) for the affected region.
+    int lx0 = x0 - hiz->base_offset_x;
+    int ly0 = y0 - hiz->base_offset_y;
+    int lx1 = x1 - hiz->base_offset_x;
+    int ly1 = y1 - hiz->base_offset_y;
+
+    for (int level = 0; level < hiz->num_levels - 1; level++) {
+        int next_lx0 = lx0 >> 1;
+        int next_ly0 = ly0 >> 1;
+        int next_lx1 = lx1 >> 1;
+        int next_ly1 = ly1 >> 1;
+        
+        int curr_w = hiz->width[level];
+        int next_w = hiz->width[level + 1];
+        
+        for (int py = next_ly0; py <= next_ly1; py++) {
+            for (int px = next_lx0; px <= next_lx1; px++) {
+                float m = -1e30f;
+                int start_x = px << 1;
+                int start_y = py << 1;
+                for (int dy = 0; dy < 2; dy++) {
+                    for (int dx = 0; dx < 2; dx++) {
+                        int cx = start_x + dx;
+                        int cy = start_y + dy;
+                        if (cx < hiz->width[level] && cy < hiz->height[level]) {
+                            float val = hiz->levels[level][cy * curr_w + cx];
+                            if (val > m) m = val;
+                        }
+                    }
+                }
+                hiz->levels[level + 1][py * next_w + px] = m;
+            }
+        }
+        lx0 = next_lx0; ly0 = next_ly0; lx1 = next_lx1; ly1 = next_ly1;
     }
 }
 
@@ -1303,6 +1391,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
                                  grid_max_x, grid_max_y, grid_min_depth)) {
             ctx->stats.grids_culled++;
             rh_grid_destroy(grid);
+            ctx->grid_counter++; // Keep diagnostic IDs stable even if culled
             return;
         }
 
@@ -1459,7 +1548,8 @@ void RiWorldBegin(void) {
     ctx->grid_counter = 0;
 
     // Initialize occlusion culling state
-    ctx->bucket_hiz = NULL;
+    ctx->global_hiz = ri_hiz_create(ctx->ss_xres, ctx->ss_yres, 0, 0, ctx->far_clip);
+    ctx->bucket_hiz = ctx->global_hiz;
     ctx->stats.grids_culled = 0;
     ctx->stats.grids_shaded = 0;
 
@@ -1505,10 +1595,8 @@ void RiWorldEnd(void) {
                 qsort(b->items, b->item_count, sizeof(RhRenderItem*), ri_compare_item_depth);
             }
 
-            // Create Hi-Z buffer for this bucket
             int bucket_width = clip_max_x - clip_min_x + 1;
             int bucket_height = clip_max_y - clip_min_y + 1;
-            ctx->bucket_hiz = ri_hiz_create(bucket_width, bucket_height, clip_min_x, clip_min_y, ctx->far_clip);
 
             // Create A-buffer for transparency compositing
             ctx->bucket_samples = ri_bucket_samples_create(bucket_width, bucket_height, 1, 1);
@@ -1558,8 +1646,6 @@ void RiWorldEnd(void) {
                                 if (mby == by && mbx == bx) {
                                     ri_sample_mpoly(ctx->raster, mpoly,
                                                    clip_min_x, clip_min_y, clip_max_x, clip_max_y, mode);
-                                    // NOTE: Hi-Z update deferred - updating here causes incorrect
-                                    // culling of adjacent items at similar depths within same bucket
                                 } else if (mby > by || (mby == by && mbx > bx)) {
                                     RhBucket* later = &ctx->buckets[mby * ctx->num_buckets_x + mbx];
                                     ri_mpoly_list_push(&later->queued, mpoly);
@@ -1567,6 +1653,12 @@ void RiWorldEnd(void) {
                             }
                         }
                     }
+
+                    // Update Global Hi-Z buffer from A-buffer for this item's contribution.
+                    // This allows subsequent items in this same bucket to be culled.
+                    ri_hiz_update_from_abuffer(ctx->global_hiz, ctx->bucket_samples,
+                                             clip_min_x, clip_min_y, clip_max_x, clip_max_y,
+                                             clip_min_x, clip_min_y, clip_max_x, clip_max_y);
                 }
 
                 if (current_bucket_idx == item->last_bucket_idx) {
@@ -1599,20 +1691,15 @@ void RiWorldEnd(void) {
                             ri_subpixel_list_composite(list, &comp_color, &comp_opacity);
                             int screen_x = clip_min_x + px;
                             int screen_y = clip_min_y + py;
-                            rh_image_set_pixel_with_opacity(ctx->raster->image, screen_x, screen_y,
-                                                           comp_color, comp_opacity);
-                        }
-                    }
-                }
-                ri_bucket_samples_destroy(ctx->bucket_samples);
-                ctx->bucket_samples = NULL;
-            }
-
-            // Destroy Hi-Z buffer for this bucket
-            ri_hiz_destroy(ctx->bucket_hiz);
-            ctx->bucket_hiz = NULL;
-
-            free(b->items);
+                                                                                                                rh_image_set_pixel_with_opacity(ctx->raster->image, screen_x, screen_y,
+                                                                                                                                               comp_color, comp_opacity);
+                                                                                                            }
+                                                                                                        }
+                                                                                                    }
+                                                                                    
+                                                                                                    ri_bucket_samples_destroy(ctx->bucket_samples);
+                                                                                                    ctx->bucket_samples = NULL;
+                                                                                                }            free(b->items);
             b->items = NULL;
             ri_mpoly_list_free(&b->queued);
         }
@@ -1626,6 +1713,13 @@ void RiWorldEnd(void) {
     }
 
     ri_mpoly_list_free(&ctx->bucket_mpolys);
+
+    // Destroy Global Hi-Z buffer
+    if (ctx->global_hiz) {
+        ri_hiz_destroy(ctx->global_hiz);
+        ctx->global_hiz = NULL;
+        ctx->bucket_hiz = NULL;
+    }
 
     ctx->timing.bucket_time = ri_get_time() - bucket_start;
 

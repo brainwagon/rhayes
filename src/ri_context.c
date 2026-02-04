@@ -115,6 +115,10 @@ void RiBegin(RtToken name) {
     // A-buffer sample storage (allocated per-bucket during rendering)
     g_ctx->bucket_samples = NULL;
 
+    // Hi-Z buffer pointers
+    g_ctx->bucket_hiz = NULL;
+    g_ctx->global_hiz = NULL;
+
     // Initialize render item pool
     g_ctx->item_pool.free_list = NULL;
     g_ctx->item_pool.free_count = 0;
@@ -155,6 +159,10 @@ void RiEnd(void) {
             }
             free(g_ctx->objects);
         }
+        // Free global HiZ if it exists
+        // Note: ri_hiz_destroy is static in ri_render.c, so we can't call it here easily
+        // unless we move its declaration or use a helper. 
+        // For now, we rely on RiWorldEnd to clean it up properly.
         free(g_ctx);
         g_ctx = NULL;
     }

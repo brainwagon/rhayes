@@ -411,8 +411,9 @@ typedef struct {
     // A-buffer sample storage (allocated per-bucket during rendering)
     RhBucketSamples* bucket_samples;
 
-    // Hierarchical Z-buffer for occlusion culling (allocated per-bucket)
-    RhHiZBuffer* bucket_hiz;
+    // Hierarchical Z-buffer for occlusion culling
+    RhHiZBuffer* bucket_hiz;    // Points to global_hiz for testing
+    RhHiZBuffer* global_hiz;    // Global persistent buffer
 
     // Progress bar settings
     bool show_progress;         // Enable progress bar output
