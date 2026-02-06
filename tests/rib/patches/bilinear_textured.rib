@@ -10,6 +10,7 @@ TransformBegin
         Color [1 1 1]
         Surface "paintedplastic" "texturename" "textures/checker.png"
         # Flat bilinear patch for texture mapping test
-        Patch "bilinear" "P" [-1 -1 0  1 -1 0  1 1 0  -1 1 0]
+        # Vertices ordered so normal faces -Z (toward camera)
+        Patch "bilinear" "P" [-1 1 0  1 1 0  -1 -1 0  1 -1 0]
     WorldEnd
 TransformEnd

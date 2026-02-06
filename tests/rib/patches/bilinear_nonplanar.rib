@@ -11,8 +11,8 @@ TransformBegin
         Color [0.6 0.7 0.9]
         Surface "matte"
         # Saddle-shaped bilinear patch (non-planar)
-        # cp[0]=(0,0), cp[1]=(1,0), cp[2]=(1,1), cp[3]=(0,1)
+        # Vertices ordered so normal faces toward camera
         # Corners at different Z heights create saddle shape
-        Patch "bilinear" "P" [-1 -1 0.5  1 -1 -0.5  1 1 0.5  -1 1 -0.5]
+        Patch "bilinear" "P" [-1 1 0.5  1 1 -0.5  -1 -1 0.5  1 -1 -0.5]
     WorldEnd
 TransformEnd

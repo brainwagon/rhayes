@@ -6,8 +6,8 @@ Projection "perspective" "fov" 45
 PixelSamples 2 2
 
 TransformBegin
-    Translate 0 0 -5
-    Rotate -20 1 0 0
+    Rotate -25 1 0 0
+    Translate 0 1 -6
 
     WorldBegin
         # Light
