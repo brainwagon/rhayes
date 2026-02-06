@@ -9,6 +9,7 @@ TransformBegin
         LightSource "distantlight" "intensity" 1 "from" [0 1 1]
         Color [0.8 0.6 0.2]
         Surface "matte"
-        Polygon "P" [-1 -1 0  1 -1 0  1 1 0  -1 1 0]
+        # Vertices wound so normal faces -Z (toward camera)
+        Polygon "P" [-1 -1 0  -1 1 0  1 1 0  1 -1 0]
     WorldEnd
 TransformEnd
