@@ -20,7 +20,7 @@ typedef enum {
 typedef struct {
     unsigned int width;
     unsigned int height;
-    unsigned char* data;    /**< Row-major pixel data, width * height * channels bytes */
+    float* data;    /**< Row-major pixel data, width * height * channels floats */
 } RhMipLevel;
 
 /**
@@ -31,13 +31,14 @@ typedef struct {
     unsigned int base_height;   /**< Original image height */
     unsigned int channels;      /**< Number of channels (1, 3, or 4) */
     unsigned int num_levels;    /**< Number of mip levels (including base) */
+    int is_hdr;                 /**< Non-zero if loaded from HDR source */
     RhMipLevel* levels;         /**< Array of mip levels, [0] is base (largest) */
 } RhTexture;
 
 /**
- * Load a PNG texture and generate mipmaps.
+ * Load a texture and generate mipmaps.
  *
- * @param filename  Path to PNG file
+ * @param filename  Path to image file
  * @param format    Desired format (RH_TEX_AUTO to detect from file)
  * @return          Texture with mipmaps, or NULL on error
  */
@@ -58,18 +59,6 @@ void rh_texture_destroy(RhTexture* tex);
  * @return        Number of mip levels
  */
 unsigned int rh_texture_mip_count(unsigned int width, unsigned int height);
-
-/**
- * Get a texel from a specific mip level with clamped coordinates.
- *
- * @param tex    Texture to sample
- * @param level  Mip level (0 = full resolution)
- * @param x      X coordinate (clamped to valid range)
- * @param y      Y coordinate (clamped to valid range)
- * @param out    Output buffer (must hold tex->channels bytes)
- */
-void rh_texture_get_texel(const RhTexture* tex, unsigned int level,
-                          int x, int y, unsigned char* out);
 
 /**
  * Sample texture with bilinear filtering at specified mip level.
@@ -95,5 +84,19 @@ RhColor rh_texture_sample_bilinear(const RhTexture* tex, unsigned int level,
  */
 RhColor rh_texture_sample(const RhTexture* tex, float u, float v,
                           float du, float dv);
+
+/**
+ * Sample texture with alpha, using automatic mip level selection.
+ *
+ * @param tex        Texture to sample
+ * @param u          Normalized u coordinate [0,1]
+ * @param v          Normalized v coordinate [0,1]
+ * @param du         Derivative of u (filter width in u direction)
+ * @param dv         Derivative of v (filter width in v direction)
+ * @param out_alpha  If non-NULL, receives interpolated alpha (1.0 for non-alpha textures)
+ * @return           Filtered color (RGB)
+ */
+RhColor rh_texture_sample_with_alpha(const RhTexture* tex, float u, float v,
+                                     float du, float dv, float* out_alpha);
 
 #endif /* RH_TEXTURE_H */

@@ -10,8 +10,9 @@ BIN_DIR = bin
 
 # Object files by library
 LIBRH_OBJS = $(OBJ_DIR)/rh_math.o $(OBJ_DIR)/rh_geometry.o $(OBJ_DIR)/rh_shader.o \
-             $(OBJ_DIR)/rh_raster.o $(OBJ_DIR)/rh_image.o $(OBJ_DIR)/lodepng.o \
-             $(OBJ_DIR)/rh_texture.o $(OBJ_DIR)/rh_shadow.o
+             $(OBJ_DIR)/rh_raster.o $(OBJ_DIR)/rh_image.o $(OBJ_DIR)/stb_image.o \
+             $(OBJ_DIR)/stb_image_write.o $(OBJ_DIR)/rh_texture.o $(OBJ_DIR)/rh_pfm.o \
+             $(OBJ_DIR)/rh_exr.o $(OBJ_DIR)/rh_shadow.o
 LIBRI_OBJS = $(OBJ_DIR)/ri_context.o $(OBJ_DIR)/ri_state.o $(OBJ_DIR)/ri_light.o \
              $(OBJ_DIR)/ri_primitive.o $(OBJ_DIR)/ri_render.o $(OBJ_DIR)/ri_options.o \
              $(OBJ_DIR)/ri_declare.o
@@ -72,6 +73,13 @@ $(CATRIB): $(OBJ_DIR)/catrib.o $(LIBRIBPARSE) $(LIBRIB) | $(BIN_DIR)
 # Scene2rib program (output main.c scene as RIB)
 $(SCENE2RIB): $(OBJ_DIR)/main_rib.o $(LIBRIB) | $(BIN_DIR)
 	$(CC) $^ -o $@ $(LDFLAGS)
+
+# Third-party stb files: compile with warnings suppressed
+$(OBJ_DIR)/stb_image.o: $(SRC_DIR)/stb_image.c | $(OBJ_DIR)
+	$(CC) -std=c99 -Iinclude -O2 -g -w -c $< -o $@
+
+$(OBJ_DIR)/stb_image_write.o: $(SRC_DIR)/stb_image_write.c | $(OBJ_DIR)
+	$(CC) -std=c99 -Iinclude -O2 -g -w -c $< -o $@
 
 # Compile source files into object files
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)

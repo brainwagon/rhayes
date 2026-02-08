@@ -78,7 +78,7 @@ Rhayes is a fast, portable software renderer based on the REYES (Render Everythi
 The renderer implements a classic REYES pipeline: recursive splitting of primitives, dicing into micropolygon grids, shading at vertices, and stochastic sampling for visibility and anti-aliasing.
 
 ## Features
-- **Pure C99**: Minimal external dependencies (lodepng for PNG I/O).
+- **Pure C99**: Minimal external dependencies (stb_image/stb_image_write for image I/O).
 - **REYES Pipeline**:
     - Recursive splitting and dicing of primitives.
     - Shading in object/eye space before visibility testing.
@@ -119,9 +119,10 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
     - Support for all storage classes: constant, uniform, varying, vertex.
     - Automatic interpolation during dicing and shading.
 - **Texture Mapping**:
-    - PNG texture loading with automatic mipmap generation.
+    - Multi-format texture loading (PNG, JPG, BMP, TGA, HDR, PFM, OpenEXR) with automatic mipmap generation.
+    - Always-float internal texture storage for unified HDR/LDR pipeline.
     - Box-filter decimation for mipmap pyramid.
-    - Bilinear texture sampling with automatic mip level selection.
+    - Bilinear texture sampling with automatic mip level selection and optional alpha output.
     - Screen-space texture derivatives for proper filtering at all orientations.
     - Correct handling of parametric singularities (e.g., sphere poles).
     - Support for grayscale, RGB, and RGBA textures.
@@ -129,7 +130,7 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
     - RIB parser for scene description with motion blur support.
     - RIB output for scene serialization (`scene2rib` utility).
     - Round-trip parsing and serialization (`catrib` utility).
-- **Output**: PNG image format with alpha channel and bKGD chunk support.
+- **Output**: Multi-format image output (PNG, JPEG, BMP, TGA, PPM). Format selected by filename extension. Alpha channel supported for PNG, TGA, and BMP; RGBA mode with non-alpha formats (e.g., JPEG) produces a warning and saves as RGB.
 
 ## Building
 Rhayes uses a standard Makefile.

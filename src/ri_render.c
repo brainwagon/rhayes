@@ -1823,7 +1823,7 @@ void RiWorldEnd(void) {
             }
         }
     } else if (ctx->raster && ctx->raster->image) {
-        rh_image_save_png_channels(ctx->raster->image, ctx->display_name, ctx->display_channels);
+        rh_image_save(ctx->raster->image, ctx->display_name, ctx->display_channels);
     }
 
     if (ctx->stats_options.endofframe >= 1) {

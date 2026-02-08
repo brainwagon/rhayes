@@ -41,6 +41,12 @@ void rh_image_save_png(const RhImage* img, const char* filename);
 // channels: 3 for RGB, 4 for RGBA
 void rh_image_save_png_channels(const RhImage* img, const char* filename, int channels);
 
+// Save the image to a file, choosing format by filename extension.
+// Supported: .png, .jpg/.jpeg, .bmp, .tga, .ppm
+// If channels is 4 (RGBA) but the format doesn't support alpha,
+// a warning is printed and the image is saved as RGB.
+void rh_image_save(const RhImage* img, const char* filename, int channels);
+
 // Free the image memory
 void rh_image_destroy(RhImage* img);
 
