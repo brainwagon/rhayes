@@ -291,3 +291,109 @@ void RiSides(RtInt nsides) {
     if (!ctx) return;
     ri_curr()->sides = (nsides == 2) ? 2 : 1;
 }
+
+// --- Implementation-Specific Attributes ---
+
+// Helper: find or create attribute slot for given category/name
+static RhImplAttribute* ri_find_or_create_attr(const char* category, const char* name) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return NULL;
+
+    RiAttributeState* state = ri_curr();
+
+    // Look for existing attribute with same category and name
+    for (int i = 0; i < state->num_impl_attrs; i++) {
+        if (strcmp(state->impl_attrs[i].category, category) == 0 &&
+            strcmp(state->impl_attrs[i].name, name) == 0) {
+            return &state->impl_attrs[i];
+        }
+    }
+
+    // Create new entry if space available
+    if (state->num_impl_attrs >= MAX_IMPL_ATTRIBUTES) {
+        fprintf(stderr, "Warning: Maximum implementation attributes exceeded\n");
+        return NULL;
+    }
+
+    RhImplAttribute* attr = &state->impl_attrs[state->num_impl_attrs];
+    state->num_impl_attrs++;
+
+    // Initialize
+    strncpy(attr->category, category, MAX_IMPL_ATTR_NAME - 1);
+    attr->category[MAX_IMPL_ATTR_NAME - 1] = '\0';
+    strncpy(attr->name, name, MAX_IMPL_ATTR_NAME - 1);
+    attr->name[MAX_IMPL_ATTR_NAME - 1] = '\0';
+    attr->num_values = 0;
+    attr->string_value[0] = '\0';
+    attr->is_string = false;
+
+    return attr;
+}
+
+void RiAttributeV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx || !name) return;
+
+    // Process each token/value pair
+    for (int i = 0; i < count; i++) {
+        if (!tokens[i] || !values[i]) continue;
+
+        RhImplAttribute* attr = ri_find_or_create_attr(name, tokens[i]);
+        if (!attr) continue;
+
+        // Look up declaration to determine type
+        const RiDeclaration* decl = ri_lookup_declaration(tokens[i]);
+
+        if (decl) {
+            if (decl->type == RI_TYPE_STRING) {
+                // String value
+                const char* str = *(const char**)values[i];
+                if (str) {
+                    strncpy(attr->string_value, str, sizeof(attr->string_value) - 1);
+                    attr->string_value[sizeof(attr->string_value) - 1] = '\0';
+                }
+                attr->is_string = true;
+                attr->num_values = 0;
+            } else {
+                // Numeric value - get float count from declaration
+                int num_floats = ri_declaration_float_count(decl);
+                if (num_floats > 16) num_floats = 16;
+
+                const float* fvals = (const float*)values[i];
+                for (int j = 0; j < num_floats; j++) {
+                    attr->values[j] = fvals[j];
+                }
+                attr->num_values = num_floats;
+                attr->is_string = false;
+            }
+        } else {
+            // No declaration found - assume single float
+            const float* fval = (const float*)values[i];
+            attr->values[0] = *fval;
+            attr->num_values = 1;
+            attr->is_string = false;
+        }
+    }
+}
+
+void RiAttribute(RtToken name, ...) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx || !name) return;
+
+    // Build token/value arrays from varargs
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, name);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    RiAttributeV(name, tokens, values, count);
+}

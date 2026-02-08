@@ -240,6 +240,14 @@ static void ribout_Option(RtToken name, RtToken* tokens, RtPointer* values, int 
     fprintf(g_rib_ctx->output, "\n");
 }
 
+static void ribout_Attribute(RtToken name, RtToken* tokens, RtPointer* values, int count) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "Attribute \"%s\"", name ? name : "");
+    write_params(tokens, values, count);
+    fprintf(g_rib_ctx->output, "\n");
+}
+
 static void ribout_AttributeBegin(void) {
     if (!g_rib_ctx || !g_rib_ctx->output) return;
     write_indent();
@@ -585,6 +593,7 @@ RiCallbacks ri_output_callbacks = {
     .Orientation = ribout_Orientation,
     .ReverseOrientation = ribout_ReverseOrientation,
     .Sides = ribout_Sides,
+    .Attribute = ribout_Attribute,
     .WorldBegin = ribout_WorldBegin,
     .WorldEnd = ribout_WorldEnd,
     .Sphere = ribout_Sphere,

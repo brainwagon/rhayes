@@ -281,5 +281,22 @@ Current development focus:
 - **Deformation Motion Blur**: Extend motion blur to support deforming geometry (not just transforms).
 - **Depth of Field**: Implement lens sampling for depth of field effects.
 
+## Implementation Limits
+
+The renderer has the following compile-time limits. These are defined in `include/ri_internal.h` and can be increased if needed (requires recompilation).
+
+| Limit | Value | Description |
+|-------|-------|-------------|
+| `MAX_STACK_DEPTH` | 64 | Maximum nesting depth for `AttributeBegin`/`End` and `TransformBegin`/`End` blocks |
+| `MAX_DECLARATIONS` | 256 | Maximum number of user-declared variables via `RiDeclare` |
+| `MAX_LIGHTS` | 8 | Maximum number of active light sources |
+| `MAX_IMPL_ATTRIBUTES` | 32 | Maximum number of implementation-specific attributes per attribute state (set via `RiAttribute`) |
+| `MAX_IMPL_ATTR_NAME` | 64 | Maximum length of attribute category and parameter names |
+| `MAX_GRID_SIZE` | 16 | Maximum micropolygon grid dimension (16x16 = 256 micropolygons per grid) |
+| `MAX_SPLIT_DEPTH` | 12 | Maximum recursive splitting depth (prevents infinite loops on degenerate geometry) |
+| `MAX_MOTION_TIME_SAMPLES` | 64 | Maximum temporal samples for motion blur (supports up to 8x8 supersampling) |
+
+Exceeding these limits will typically result in a warning message to stderr, with the excess data being ignored rather than causing a crash.
+
 ## License
 MIT License.

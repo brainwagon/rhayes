@@ -142,6 +142,8 @@ void RiShadingRate(RtFloat size);
 void RiOrientation(RtToken orientation);  // "rh" or "lh"
 void RiReverseOrientation(void);
 void RiSides(RtInt nsides);               // 1 or 2
+void RiAttribute(RtToken name, ...);
+void RiAttributeV(RtToken name, RtToken* tokens, RtPointer* values, int count);
 
 // 6. Scene Structure
 void RiWorldBegin(void);

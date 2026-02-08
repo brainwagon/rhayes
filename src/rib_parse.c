@@ -417,6 +417,54 @@ static int parse_Sides(RibParser* p) {
     return 0;
 }
 
+static int parse_Attribute(RibParser* p) {
+    char name[64];
+    if (expect_string(p, name, sizeof(name)) < 0) return -1;
+
+    RtToken tokens[MAX_PARAMS];
+    RtPointer values[MAX_PARAMS];
+    float* arrays[MAX_PARAMS];
+    float scalars[MAX_PARAMS];
+    char* strings[MAX_PARAMS];
+    int param_count = 0;
+
+    while (p->current_token.type == TOK_STRING) {
+        tokens[param_count] = strdup(p->current_token.value.string);
+        arrays[param_count] = NULL;
+        strings[param_count] = NULL;
+        next_token(p);
+
+        if (p->current_token.type == TOK_NUMBER) {
+            scalars[param_count] = (float)p->current_token.value.number;
+            values[param_count] = &scalars[param_count];
+            next_token(p);
+        } else if (p->current_token.type == TOK_STRING) {
+            strings[param_count] = strdup(p->current_token.value.string);
+            values[param_count] = strings[param_count];
+            next_token(p);
+        } else if (p->current_token.type == TOK_LBRACKET) {
+            int count;
+            if (read_float_array(p, &count) < 0) return -1;
+            arrays[param_count] = (float*)malloc(count * sizeof(float));
+            memcpy(arrays[param_count], p->float_array, count * sizeof(float));
+            values[param_count] = arrays[param_count];
+        }
+        param_count++;
+        if (param_count >= MAX_PARAMS) break;
+    }
+
+    if (p->callbacks->Attribute) {
+        p->callbacks->Attribute(name, tokens, values, param_count);
+    }
+
+    for (int i = 0; i < param_count; i++) {
+        free(tokens[i]);
+        if (arrays[i]) free(arrays[i]);
+        if (strings[i]) free(strings[i]);
+    }
+    return 0;
+}
+
 static int parse_Option(RibParser* p) {
     char name[64];
     if (expect_string(p, name, sizeof(name)) < 0) return -1;
@@ -926,6 +974,7 @@ static int parse_Declare(RibParser* p) {
 }
 
 static const CommandEntry commands[] = {
+    {"Attribute", parse_Attribute},
     {"AttributeBegin", cmd_AttributeBegin},
     {"AttributeEnd", cmd_AttributeEnd},
     {"Basis", parse_Basis},

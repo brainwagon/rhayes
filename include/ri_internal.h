@@ -29,6 +29,8 @@
 #define MAX_STACK_DEPTH 64
 #define MAX_DECLARATIONS 256
 #define MAX_LIGHTS 8
+#define MAX_IMPL_ATTRIBUTES 32
+#define MAX_IMPL_ATTR_NAME 64
 
 // --- Display Mode ---
 
@@ -47,6 +49,17 @@ typedef enum {
 
 // Motion blur time samples
 #define MAX_MOTION_TIME_SAMPLES 64  // Supports up to 8x8 supersampling
+
+// --- Implementation-Specific Attribute Entry ---
+
+typedef struct {
+    char category[MAX_IMPL_ATTR_NAME];  // Attribute category (e.g., "bound", "dice", "user")
+    char name[MAX_IMPL_ATTR_NAME];      // Parameter name (e.g., "displacement", "rasterorient")
+    float values[16];                    // Float values (up to 16 for matrix)
+    int num_values;                      // Number of float values
+    char string_value[256];              // String value (if applicable)
+    bool is_string;                      // True if this is a string attribute
+} RhImplAttribute;
 
 // --- Attribute State ---
 
@@ -72,6 +85,10 @@ typedef struct {
     bool orientation_lh;         // false = right-handed (default), true = left-handed
     int reverse_orientation;     // Count of ReverseOrientation calls (odd = flipped)
     int sides;                   // 1 = front only (default), 2 = both sides
+
+    // Implementation-specific attributes (RiAttribute)
+    RhImplAttribute impl_attrs[MAX_IMPL_ATTRIBUTES];
+    int num_impl_attrs;
 } RiAttributeState;
 
 // --- Variable Declaration ---
