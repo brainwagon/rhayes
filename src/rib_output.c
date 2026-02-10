@@ -374,6 +374,12 @@ static void ribout_Sides(RtInt nsides) {
     fprintf(g_rib_ctx->output, "Sides %d\n", nsides);
 }
 
+static void ribout_Matte(RtBoolean onoff) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "Matte %d\n", onoff);
+}
+
 static void ribout_WorldBegin(void) {
     if (!g_rib_ctx || !g_rib_ctx->output) return;
     write_indent();
@@ -606,6 +612,7 @@ RiCallbacks ri_output_callbacks = {
     .Orientation = ribout_Orientation,
     .ReverseOrientation = ribout_ReverseOrientation,
     .Sides = ribout_Sides,
+    .Matte = ribout_Matte,
     .Attribute = ribout_Attribute,
     .WorldBegin = ribout_WorldBegin,
     .WorldEnd = ribout_WorldEnd,

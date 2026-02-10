@@ -187,6 +187,10 @@ static void render_Sides(RtInt nsides) {
     RiSides(nsides);
 }
 
+static void render_Matte(RtBoolean onoff) {
+    RiMatte(onoff);
+}
+
 static void render_Attribute(RtToken name, RtToken* tokens, RtPointer* values, int count) {
     RiAttributeV(name, tokens, values, count);
 }
@@ -304,6 +308,7 @@ RiCallbacks ri_render_callbacks = {
     .Orientation = render_Orientation,
     .ReverseOrientation = render_ReverseOrientation,
     .Sides = render_Sides,
+    .Matte = render_Matte,
     .Attribute = render_Attribute,
     .WorldBegin = render_WorldBegin,
     .WorldEnd = render_WorldEnd,

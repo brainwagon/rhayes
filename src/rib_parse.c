@@ -417,6 +417,15 @@ static int parse_Sides(RibParser* p) {
     return 0;
 }
 
+static int parse_Matte(RibParser* p) {
+    double n;
+    if (expect_number(p, &n) < 0) return -1;
+    if (p->callbacks->Matte) {
+        p->callbacks->Matte((RtBoolean)n);
+    }
+    return 0;
+}
+
 static int parse_Attribute(RibParser* p) {
     char name[64];
     if (expect_string(p, name, sizeof(name)) < 0) return -1;
@@ -1055,6 +1064,7 @@ static const CommandEntry commands[] = {
     {"Identity", cmd_Identity},
     {"Illuminate", parse_Illuminate},
     {"LightSource", parse_LightSource},
+    {"Matte", parse_Matte},
     {"MotionBegin", parse_MotionBegin},
     {"MotionEnd", cmd_MotionEnd},
     {"ObjectBegin", parse_ObjectBegin},

@@ -87,6 +87,7 @@ typedef struct {
     bool orientation_lh;         // false = right-handed (default), true = left-handed
     int reverse_orientation;     // Count of ReverseOrientation calls (odd = flipped)
     int sides;                   // 1 = front only (default), 2 = both sides
+    bool is_matte;               // True if this is a hold-out matte object
 
     // Implementation-specific attributes (RiAttribute)
     RhImplAttribute impl_attrs[MAX_IMPL_ATTRIBUTES];
@@ -125,6 +126,7 @@ typedef struct {
     float max_depth;     // Maximum depth for Hi-Z culling
     bool orientation_flipped;    // Combined orientation state at primitive creation
     int sides;                   // Sides value captured at primitive creation
+    bool is_matte;               // True if this is a hold-out matte object
 } RhRenderItem;
 
 // --- Micropolygon Types ---
@@ -148,6 +150,7 @@ typedef struct {
     int max_x, max_y;
     bool orientation_flipped;  // Orientation state for backface culling
     int sides;                 // 1 or 2
+    bool is_matte;             // True if this is a hold-out matte object
 } RhMicropolygon;
 
 typedef struct {
@@ -177,6 +180,7 @@ typedef struct {
     float z;            // Depth value
     RhColor color;      // Premultiplied color (color * opacity)
     RhColor opacity;    // Per-channel opacity
+    bool is_matte;      // True if this is a hold-out matte sample
 } RhSample;
 
 typedef struct {

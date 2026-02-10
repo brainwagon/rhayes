@@ -292,6 +292,12 @@ void RiSides(RtInt nsides) {
     ri_curr()->sides = (nsides == 2) ? 2 : 1;
 }
 
+void RiMatte(RtBoolean onoff) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    ri_curr()->is_matte = (onoff != 0);
+}
+
 // --- Implementation-Specific Attributes ---
 
 // Helper: find or create attribute slot for given category/name

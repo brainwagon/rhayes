@@ -59,6 +59,7 @@ typedef struct RiCallbacks {
     void (*Orientation)(RtToken orientation);
     void (*ReverseOrientation)(void);
     void (*Sides)(RtInt nsides);
+    void (*Matte)(RtBoolean onoff);
     void (*Attribute)(RtToken name, RtToken *tokens, RtPointer *values, int count);
 
     // Scene Structure

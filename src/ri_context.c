@@ -70,6 +70,7 @@ void RiBegin(RtToken name) {
     g_ctx->stack[0].orientation_lh = true;        // Left-handed by default (RenderMan convention)
     g_ctx->stack[0].reverse_orientation = 0;
     g_ctx->stack[0].sides = 1;                    // Front-only by default (backface culling)
+    g_ctx->stack[0].is_matte = false;
 
     // Default Projection (Perspective)
     g_ctx->projection = rh_mat4_identity();

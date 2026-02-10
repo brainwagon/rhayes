@@ -129,6 +129,7 @@ RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* transfor
     bool flipped = ri_curr()->orientation_lh ^ ((ri_curr()->reverse_orientation & 1) != 0);
     item->orientation_flipped = flipped;
     item->sides = ri_curr()->sides;
+    item->is_matte = ri_curr()->is_matte;
 
     item->processed = false;
     item->last_bucket_idx = -1;
@@ -243,7 +244,7 @@ static void ri_subpixel_list_init(RhSubpixelList* list) {
     list->opaque_z = ctx->far_clip;
 }
 
-static bool ri_subpixel_list_insert(RhSubpixelList* list, float z, RhColor color, RhColor opacity) {
+static bool ri_subpixel_list_insert(RhSubpixelList* list, float z, RhColor color, RhColor opacity, bool is_matte) {
     RiContextData* ctx = ri_get_ctx();
     float othresh = ctx->memory.opacity_threshold;
 
@@ -292,6 +293,7 @@ static bool ri_subpixel_list_insert(RhSubpixelList* list, float z, RhColor color
     list->samples[insert_pos].z = z;
     list->samples[insert_pos].color = color;
     list->samples[insert_pos].opacity = opacity;
+    list->samples[insert_pos].is_matte = is_matte;
     list->count++;
 
     // Update accumulated opacity and compute opaque_z
@@ -328,6 +330,11 @@ static void ri_subpixel_list_composite(const RhSubpixelList* list, RhColor* out_
     float trans_r = 1.0f, trans_g = 1.0f, trans_b = 1.0f;
 
     for (int i = 0; i < list->count; i++) {
+        if (list->samples[i].is_matte) {
+            // Matte sample: blocks everything behind it, contributes nothing
+            break;
+        }
+
         color.r += trans_r * list->samples[i].color.r;
         color.g += trans_g * list->samples[i].color.g;
         color.b += trans_b * list->samples[i].color.b;
@@ -796,6 +803,7 @@ static void ri_grid_to_mpolys_motion(const RhMicroGrid* grid,
                                       float motion_t1,
                                       bool orientation_flipped,
                                       int sides,
+                                      bool is_matte,
                                       RhMicropolygonList* out_list,
                                       RhShadingMode mode) {
     RiContextData* ctx = ri_get_ctx();
@@ -889,6 +897,7 @@ static void ri_grid_to_mpolys_motion(const RhMicroGrid* grid,
 
             mpoly.orientation_flipped = orientation_flipped;
             mpoly.sides = sides;
+            mpoly.is_matte = is_matte;
 
             ctx->stats.total_micropolygons++;
             ctx->stats.mpolys_this_bucket++;
@@ -1090,11 +1099,17 @@ static void ri_sample_mpoly(
                             int list_idx = local_y * bucket_w + local_x;
                             RhSubpixelList* list = &ctx->bucket_samples->lists[list_idx];
                             // Note: final_color (Ci) is already premultiplied by shaders
-                            ri_subpixel_list_insert(list, z, final_color, final_opacity);
+                            ri_subpixel_list_insert(list, z, final_color, final_opacity, mpoly->is_matte);
                         }
                     } else {
                         // Direct framebuffer write (no A-buffer)
-                        rh_image_set_pixel_with_opacity(r->image, x, y, final_color, final_opacity);
+                        if (mpoly->is_matte) {
+                            // Matte: write transparent (black, zero opacity)
+                            RhColor black = {0.0f, 0.0f, 0.0f};
+                            rh_image_set_pixel_with_opacity(r->image, x, y, black, black);
+                        } else {
+                            rh_image_set_pixel_with_opacity(r->image, x, y, final_color, final_opacity);
+                        }
                     }
                     drawn = true;
                 }
@@ -1149,11 +1164,16 @@ static void ri_sample_mpoly(
                             int list_idx = local_y * bucket_w + local_x;
                             RhSubpixelList* list = &ctx->bucket_samples->lists[list_idx];
                             // Note: final_color (Ci) is already premultiplied by shaders
-                            ri_subpixel_list_insert(list, z, final_color, final_opacity);
+                            ri_subpixel_list_insert(list, z, final_color, final_opacity, mpoly->is_matte);
                         }
                     } else {
                         // Direct framebuffer write (no A-buffer)
-                        rh_image_set_pixel_with_opacity(r->image, x, y, final_color, final_opacity);
+                        if (mpoly->is_matte) {
+                            RhColor black = {0.0f, 0.0f, 0.0f};
+                            rh_image_set_pixel_with_opacity(r->image, x, y, black, black);
+                        } else {
+                            rh_image_set_pixel_with_opacity(r->image, x, y, final_color, final_opacity);
+                        }
                     }
                 }
             }
@@ -1480,16 +1500,22 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             shctx.du = filter_width;
             shctx.dv = filter_width;
 
-            if (item->shader) {
-                item->shader(&shctx, item->shader_params);
+            if (item->is_matte) {
+                // Matte objects: no shading, black color, fully opaque
+                shctx.Ci = (RhColor){0.0f, 0.0f, 0.0f};
+                shctx.Oi = (RhColor){1.0f, 1.0f, 1.0f};
             } else {
-                shctx.Ci = cur_col;
-                shctx.Oi = shctx.Os;
-            }
+                if (item->shader) {
+                    item->shader(&shctx, item->shader_params);
+                } else {
+                    shctx.Ci = cur_col;
+                    shctx.Oi = shctx.Os;
+                }
 
-            // Apply atmosphere shader if set
-            if (item->atmosphere_shader) {
-                item->atmosphere_shader(&shctx, item->atmosphere_params);
+                // Apply atmosphere shader if set
+                if (item->atmosphere_shader) {
+                    item->atmosphere_shader(&shctx, item->atmosphere_params);
+                }
             }
 
             grid->colors[i] = shctx.Ci;
@@ -1499,7 +1525,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
         ri_grid_to_mpolys_motion(grid, screen_pos, screen_pos_t1, cam_normals, has_motion,
                                  item->motion_t0, item->motion_t1,
                                  item->orientation_flipped, item->sides,
-                                 out_mpolys, mode);
+                                 item->is_matte, out_mpolys, mode);
 
         rh_grid_destroy(grid);
         ctx->grid_counter++;
