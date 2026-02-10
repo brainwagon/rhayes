@@ -96,6 +96,7 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
 - **Basis Matrices**: Support for `RiBasis` (Bezier, B-Spline, Catmull-Rom, etc.).
 - **Shading & Lighting**:
     - Surface shaders: `matte`, `plastic`, `metal`, `paintedplastic` (textured), and diagnostic shaders (`random`, `randomgrid`).
+    - Atmosphere shaders: `depthcue` (linear depth fade) and `fog` (exponential extinction) via `RiAtmosphere`.
     - Light sources: Point, Distant, Ambient, and Spotlight.
 - **Shadow Mapping**:
     - Depth-based shadow maps with Percentage Closer Filtering (PCF).

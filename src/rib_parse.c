@@ -644,6 +644,65 @@ static int parse_Opacity(RibParser* p) {
     return 0;
 }
 
+static int parse_Atmosphere(RibParser* p) {
+    char name[64];
+    if (expect_string(p, name, sizeof(name)) < 0) return -1;
+
+    RtToken tokens[MAX_PARAMS];
+    RtPointer values[MAX_PARAMS];
+    float param_values[MAX_PARAMS];
+    char* string_values[MAX_PARAMS];
+    int param_count = 0;
+    int string_count = 0;
+
+    while (p->current_token.type == TOK_STRING) {
+        tokens[param_count] = strdup(p->current_token.value.string);
+        next_token(p);
+
+        if (p->current_token.type == TOK_NUMBER) {
+            param_values[param_count] = (float)p->current_token.value.number;
+            values[param_count] = &param_values[param_count];
+            next_token(p);
+        } else if (p->current_token.type == TOK_LBRACKET) {
+            // Array parameter (e.g., "background" [r g b])
+            next_token(p);  // consume '['
+            float* arr = &p->float_array[0];
+            int arr_count = 0;
+            while (p->current_token.type == TOK_NUMBER && arr_count < 16) {
+                arr[arr_count++] = (float)p->current_token.value.number;
+                next_token(p);
+            }
+            if (p->current_token.type == TOK_RBRACKET) {
+                next_token(p);  // consume ']'
+            }
+            // Allocate persistent storage for this array
+            float* arr_copy = (float*)malloc(arr_count * sizeof(float));
+            memcpy(arr_copy, arr, arr_count * sizeof(float));
+            values[param_count] = arr_copy;
+            // Track for cleanup using string_values slots
+            string_values[string_count] = (char*)arr_copy;
+            string_count++;
+        } else if (p->current_token.type == TOK_STRING) {
+            string_values[string_count] = strdup(p->current_token.value.string);
+            values[param_count] = string_values[string_count];
+            string_count++;
+            next_token(p);
+        }
+        param_count++;
+        if (param_count >= MAX_PARAMS) break;
+    }
+
+    p->callbacks->Atmosphere(name, tokens, values, param_count);
+
+    for (int i = 0; i < param_count; i++) {
+        free(tokens[i]);
+    }
+    for (int i = 0; i < string_count; i++) {
+        free(string_values[i]);
+    }
+    return 0;
+}
+
 static int parse_Surface(RibParser* p) {
     char name[64];
     if (expect_string(p, name, sizeof(name)) < 0) return -1;
@@ -974,6 +1033,7 @@ static int parse_Declare(RibParser* p) {
 }
 
 static const CommandEntry commands[] = {
+    {"Atmosphere", parse_Atmosphere},
     {"Attribute", parse_Attribute},
     {"AttributeBegin", cmd_AttributeBegin},
     {"AttributeEnd", cmd_AttributeEnd},

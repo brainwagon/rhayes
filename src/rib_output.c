@@ -69,13 +69,17 @@ static void write_params(RtToken* tokens, RtPointer* values, int count) {
                    strcmp(token, "Ka") == 0 ||
                    strcmp(token, "Kd") == 0 ||
                    strcmp(token, "Ks") == 0 ||
-                   strcmp(token, "roughness") == 0) {
+                   strcmp(token, "roughness") == 0 ||
+                   strcmp(token, "mindistance") == 0 ||
+                   strcmp(token, "maxdistance") == 0 ||
+                   strcmp(token, "distance") == 0) {
             // Single float
             float* fval = (float*)values[i];
             fprintf(g_rib_ctx->output, "%g", *fval);
         } else if (strcmp(token, "from") == 0 ||
                    strcmp(token, "to") == 0 ||
-                   strcmp(token, "lightcolor") == 0) {
+                   strcmp(token, "lightcolor") == 0 ||
+                   strcmp(token, "background") == 0) {
             // 3-float array (point or color)
             float* fvals = (float*)values[i];
             write_float_array(fvals, 3);
@@ -344,6 +348,14 @@ static void ribout_Surface(RtToken name, RtToken* tokens, RtPointer* values, int
     fprintf(g_rib_ctx->output, "\n");
 }
 
+static void ribout_Atmosphere(RtToken name, RtToken* tokens, RtPointer* values, int count) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "Atmosphere \"%s\"", name ? name : "");
+    write_params(tokens, values, count);
+    fprintf(g_rib_ctx->output, "\n");
+}
+
 static void ribout_Orientation(RtToken orientation) {
     if (!g_rib_ctx || !g_rib_ctx->output) return;
     write_indent();
@@ -590,6 +602,7 @@ RiCallbacks ri_output_callbacks = {
     .Color = ribout_Color,
     .Opacity = ribout_Opacity,
     .Surface = ribout_Surface,
+    .Atmosphere = ribout_Atmosphere,
     .Orientation = ribout_Orientation,
     .ReverseOrientation = ribout_ReverseOrientation,
     .Sides = ribout_Sides,

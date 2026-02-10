@@ -184,6 +184,10 @@ void RiGeometryV(RtToken type, RtToken* tokens, RtPointer* values, int count);
 void RiSurface(RtToken name, ...);
 void RiSurfaceV(RtToken name, RtToken* tokens, RtPointer* values, int count);
 
+// Atmosphere
+void RiAtmosphere(RtToken name, ...);
+void RiAtmosphereV(RtToken name, RtToken* tokens, RtPointer* values, int count);
+
 // 8. Lighting
 RtToken RiLightSource(RtToken name, ...);
 RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int count);

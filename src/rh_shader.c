@@ -440,3 +440,75 @@ void rh_shader_surface_random(RhShaderContext* ctx, void* params) {
     ctx->Ci.g *= ctx->Oi.g;
     ctx->Ci.b *= ctx->Oi.b;
 }
+
+// --- Atmosphere Shaders ---
+
+static float clamp01(float x) {
+    if (x < 0.0f) return 0.0f;
+    if (x > 1.0f) return 1.0f;
+    return x;
+}
+
+void rh_shader_atmosphere_depthcue(RhShaderContext* ctx, void* params) {
+    RhDepthcueParams* p = (RhDepthcueParams*)params;
+    float mindist = 0.0f, maxdist = 1.0f;
+    RhColor background = {0.0f, 0.0f, 0.0f};
+
+    if (p) {
+        mindist = p->mindistance;
+        maxdist = p->maxdistance;
+        background = p->background;
+    }
+
+    float depth = ctx->P.z;
+    float range = maxdist - mindist;
+    float f = (range > 0.0f) ? clamp01((depth - mindist) / range) : 0.0f;
+
+    // Un-premultiply Ci (surface shaders premultiply Ci *= Oi)
+    RhColor Ci;
+    Ci.r = (ctx->Oi.r > 1e-6f) ? ctx->Ci.r / ctx->Oi.r : 0.0f;
+    Ci.g = (ctx->Oi.g > 1e-6f) ? ctx->Ci.g / ctx->Oi.g : 0.0f;
+    Ci.b = (ctx->Oi.b > 1e-6f) ? ctx->Ci.b / ctx->Oi.b : 0.0f;
+
+    // Blend toward background color
+    float inv_f = 1.0f - f;
+    Ci.r = Ci.r * inv_f + background.r * f;
+    Ci.g = Ci.g * inv_f + background.g * f;
+    Ci.b = Ci.b * inv_f + background.b * f;
+
+    // Re-premultiply
+    ctx->Ci.r = Ci.r * ctx->Oi.r;
+    ctx->Ci.g = Ci.g * ctx->Oi.g;
+    ctx->Ci.b = Ci.b * ctx->Oi.b;
+}
+
+void rh_shader_atmosphere_fog(RhShaderContext* ctx, void* params) {
+    RhFogParams* p = (RhFogParams*)params;
+    float dist = 1.0f;
+    RhColor background = {0.0f, 0.0f, 0.0f};
+
+    if (p) {
+        dist = p->distance;
+        background = p->background;
+    }
+
+    float depth = ctx->P.z;
+    float f = (dist > 0.0f) ? clamp01(1.0f - expf(-depth / dist)) : 0.0f;
+
+    // Un-premultiply Ci
+    RhColor Ci;
+    Ci.r = (ctx->Oi.r > 1e-6f) ? ctx->Ci.r / ctx->Oi.r : 0.0f;
+    Ci.g = (ctx->Oi.g > 1e-6f) ? ctx->Ci.g / ctx->Oi.g : 0.0f;
+    Ci.b = (ctx->Oi.b > 1e-6f) ? ctx->Ci.b / ctx->Oi.b : 0.0f;
+
+    // Blend toward background color
+    float inv_f = 1.0f - f;
+    Ci.r = Ci.r * inv_f + background.r * f;
+    Ci.g = Ci.g * inv_f + background.g * f;
+    Ci.b = Ci.b * inv_f + background.b * f;
+
+    // Re-premultiply
+    ctx->Ci.r = Ci.r * ctx->Oi.r;
+    ctx->Ci.g = Ci.g * ctx->Oi.g;
+    ctx->Ci.b = Ci.b * ctx->Oi.b;
+}

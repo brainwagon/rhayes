@@ -171,6 +171,10 @@ static void render_Surface(RtToken name, RtToken* tokens, RtPointer* values, int
     RiSurfaceV(name, tokens, values, count);
 }
 
+static void render_Atmosphere(RtToken name, RtToken* tokens, RtPointer* values, int count) {
+    RiAtmosphereV(name, tokens, values, count);
+}
+
 static void render_Orientation(RtToken orientation) {
     RiOrientation(orientation);
 }
@@ -296,6 +300,7 @@ RiCallbacks ri_render_callbacks = {
     .Color = render_Color,
     .Opacity = render_Opacity,
     .Surface = render_Surface,
+    .Atmosphere = render_Atmosphere,
     .Orientation = render_Orientation,
     .ReverseOrientation = render_ReverseOrientation,
     .Sides = render_Sides,

@@ -1,0 +1,36 @@
+##RenderMan RIB-Structure 1.1
+version 3.03
+Format 200 200 1
+Display "depthcue.png" "file" "rgba"
+Projection "perspective" "fov" 45
+TransformBegin
+    Translate 0 0 -5
+    WorldBegin
+        LightSource "distantlight" "intensity" 1 "from" [0 1 -1]
+        Atmosphere "depthcue" "mindistance" 2 "maxdistance" 8 "background" [0.2 0.2 0.3]
+
+        # Near sphere (should be bright)
+        AttributeBegin
+            Color [1 0 0]
+            Surface "matte"
+            Translate -1.2 0 0
+            Sphere 0.8 -0.8 0.8 360
+        AttributeEnd
+
+        # Mid sphere
+        AttributeBegin
+            Color [0 1 0]
+            Surface "matte"
+            Translate 1.2 0 2
+            Sphere 0.8 -0.8 0.8 360
+        AttributeEnd
+
+        # Far sphere (should be faded toward background)
+        AttributeBegin
+            Color [0 0 1]
+            Surface "matte"
+            Translate 0 0 5
+            Sphere 0.8 -0.8 0.8 360
+        AttributeEnd
+    WorldEnd
+TransformEnd

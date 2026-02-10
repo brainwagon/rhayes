@@ -55,6 +55,7 @@ typedef struct RiCallbacks {
     void (*Color)(RtColor color);
     void (*Opacity)(RtColor opacity);
     void (*Surface)(RtToken name, RtToken *tokens, RtPointer *values, int count);
+    void (*Atmosphere)(RtToken name, RtToken *tokens, RtPointer *values, int count);
     void (*Orientation)(RtToken orientation);
     void (*ReverseOrientation)(void);
     void (*Sides)(RtInt nsides);

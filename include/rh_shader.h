@@ -56,6 +56,10 @@ void rh_shader_surface_shinymetal(RhShaderContext* ctx, void* params);
 void rh_shader_surface_randomgrid(RhShaderContext* ctx, void* params);
 void rh_shader_surface_random(RhShaderContext* ctx, void* params);
 
+// Atmosphere Shaders
+void rh_shader_atmosphere_depthcue(RhShaderContext* ctx, void* params);
+void rh_shader_atmosphere_fog(RhShaderContext* ctx, void* params);
+
 // Parameter Structures for Standard Shaders
 typedef struct {
     float Ka;
@@ -93,5 +97,17 @@ typedef struct {
     float roughness;
     char texturename[256]; // Placeholder for environment map (not implemented yet)
 } RhShinyMetalParams;
+
+// Atmosphere Shader Parameter Structures
+typedef struct {
+    float mindistance;
+    float maxdistance;
+    RhColor background;
+} RhDepthcueParams;
+
+typedef struct {
+    float distance;
+    RhColor background;
+} RhFogParams;
 
 #endif // RH_SHADER_H

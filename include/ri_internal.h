@@ -79,6 +79,8 @@ typedef struct {
     // Shading
     RhShaderFunc current_surface_shader;
     void* current_shader_params;
+    RhShaderFunc current_atmosphere_shader;
+    void* current_atmosphere_params;
     float shading_rate;  // Controls splitting granularity (default 1.0)
 
     // Orientation and sides
@@ -113,6 +115,8 @@ typedef struct {
     RhColor opacity;     // Surface opacity captured at primitive creation
     RhShaderFunc shader;
     void* shader_params;
+    RhShaderFunc atmosphere_shader;
+    void* atmosphere_params;
     float shading_rate;  // Captured from attribute state
     bool processed;      // Has this primitive been split/diced/shaded?
     int last_bucket_idx; // Linear index of last bucket containing this item

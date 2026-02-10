@@ -62,6 +62,8 @@ void RiBegin(RtToken name) {
     // RISpec says implementation dependent default.
     g_ctx->stack[0].current_surface_shader = rh_shader_surface_plastic;
     g_ctx->stack[0].current_shader_params = NULL;
+    g_ctx->stack[0].current_atmosphere_shader = NULL;
+    g_ctx->stack[0].current_atmosphere_params = NULL;
     g_ctx->stack[0].shading_rate = 1.0f; // Default ShadingRate
 
     // Default Orientation and Sides

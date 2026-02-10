@@ -121,6 +121,8 @@ RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* transfor
     item->opacity = ri_curr()->opacity;
     item->shader = ri_curr()->current_surface_shader;
     item->shader_params = ri_curr()->current_shader_params;
+    item->atmosphere_shader = ri_curr()->current_atmosphere_shader;
+    item->atmosphere_params = ri_curr()->current_atmosphere_params;
     item->shading_rate = ri_curr()->shading_rate;
 
     // Compute effective orientation flip
@@ -1483,6 +1485,11 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             } else {
                 shctx.Ci = cur_col;
                 shctx.Oi = shctx.Os;
+            }
+
+            // Apply atmosphere shader if set
+            if (item->atmosphere_shader) {
+                item->atmosphere_shader(&shctx, item->atmosphere_params);
             }
 
             grid->colors[i] = shctx.Ci;

@@ -856,3 +856,95 @@ void RiSurface(RtToken name, ...) {
 
     RiSurfaceV(name, tokens, values, count);
 }
+
+// --- Atmosphere Shader ---
+
+void RiAtmosphereV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+
+    // Clear atmosphere if name is NULL or empty
+    if (!name || name[0] == '\0') {
+        ri_curr()->current_atmosphere_shader = NULL;
+        ri_curr()->current_atmosphere_params = NULL;
+        return;
+    }
+
+    if (strcmp(name, "depthcue") == 0) {
+        ri_curr()->current_atmosphere_shader = rh_shader_atmosphere_depthcue;
+        RhDepthcueParams* params = (RhDepthcueParams*)malloc(sizeof(RhDepthcueParams));
+        if (params) {
+            // RenderMan defaults
+            params->mindistance = 0.0f;
+            params->maxdistance = 1.0f;
+            params->background = (RhColor){0.0f, 0.0f, 0.0f};
+
+            for (int i = 0; i < count; i++) {
+                RtToken token = tokens[i];
+                if (!token) break;
+                if (strcmp(token, "mindistance") == 0) {
+                    RtFloat* val = (RtFloat*)values[i];
+                    params->mindistance = *val;
+                } else if (strcmp(token, "maxdistance") == 0) {
+                    RtFloat* val = (RtFloat*)values[i];
+                    params->maxdistance = *val;
+                } else if (strcmp(token, "background") == 0) {
+                    RtFloat* col = (RtFloat*)values[i];
+                    params->background.r = col[0];
+                    params->background.g = col[1];
+                    params->background.b = col[2];
+                }
+            }
+            ri_curr()->current_atmosphere_params = params;
+        } else {
+            ri_curr()->current_atmosphere_params = NULL;
+        }
+    } else if (strcmp(name, "fog") == 0) {
+        ri_curr()->current_atmosphere_shader = rh_shader_atmosphere_fog;
+        RhFogParams* params = (RhFogParams*)malloc(sizeof(RhFogParams));
+        if (params) {
+            params->distance = 1.0f;
+            params->background = (RhColor){0.0f, 0.0f, 0.0f};
+
+            for (int i = 0; i < count; i++) {
+                RtToken token = tokens[i];
+                if (!token) break;
+                if (strcmp(token, "distance") == 0) {
+                    RtFloat* val = (RtFloat*)values[i];
+                    params->distance = *val;
+                } else if (strcmp(token, "background") == 0) {
+                    RtFloat* col = (RtFloat*)values[i];
+                    params->background.r = col[0];
+                    params->background.g = col[1];
+                    params->background.b = col[2];
+                }
+            }
+            ri_curr()->current_atmosphere_params = params;
+        } else {
+            ri_curr()->current_atmosphere_params = NULL;
+        }
+    } else {
+        fprintf(stderr, "Warning: Unknown atmosphere shader '%s'\n", name);
+    }
+}
+
+void RiAtmosphere(RtToken name, ...) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+
+    RtToken tokens[16];
+    RtPointer values[16];
+    int count = 0;
+
+    va_list ap;
+    va_start(ap, name);
+    RtToken token;
+    while ((token = va_arg(ap, RtToken)) != RI_NULL && count < 16) {
+        tokens[count] = token;
+        values[count] = va_arg(ap, RtPointer);
+        count++;
+    }
+    va_end(ap);
+
+    RiAtmosphereV(name, tokens, values, count);
+}
