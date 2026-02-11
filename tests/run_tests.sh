@@ -6,7 +6,6 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RENDER="$PROJECT_DIR/bin/render"
 CATRIB="$PROJECT_DIR/bin/catrib"
 SCENE2RIB="$PROJECT_DIR/bin/scene2rib"
-RHAYES="$PROJECT_DIR/rhayes"
 RIB_DIR="$SCRIPT_DIR/rib"
 REF_DIR="$SCRIPT_DIR/reference"
 OUT_DIR="$SCRIPT_DIR/output"
@@ -123,63 +122,6 @@ run_roundtrip_test() {
     fi
 }
 
-run_main_scene_roundtrip_test() {
-    echo ""
-    echo "=== Main Scene Roundtrip Test ==="
-
-    mkdir -p "$OUT_DIR"
-
-    # 1. Generate direct render from main.c
-    if ! "$RHAYES" 2>/dev/null; then
-        echo -e "${RED}FAIL${NC} [main-roundtrip] direct render failed"
-        ((FAIL++))
-        return
-    fi
-    mv output.png "$OUT_DIR/output_direct.png"
-
-    # 2. Generate RIB file from scene2rib
-    local scene_rib="$OUT_DIR/scene.rib"
-    if ! "$SCENE2RIB" "$scene_rib" 2>/dev/null; then
-        echo -e "${RED}FAIL${NC} [main-roundtrip] scene2rib failed"
-        ((FAIL++))
-        return
-    fi
-
-    # 3. Render from RIB file
-    if ! "$RENDER" "$scene_rib" 2>/dev/null; then
-        echo -e "${RED}FAIL${NC} [main-roundtrip] render from RIB failed"
-        ((FAIL++))
-        return
-    fi
-    # render produces output.png from Display command in scene.rib
-    mv output.png "$OUT_DIR/output_rib.png"
-
-    # 4. Compare the two PNG files
-    # Use ImageMagick if available for pixel-level comparison with tolerance
-    # Otherwise fall back to checking file size similarity
-    if command -v compare >/dev/null 2>&1; then
-        # Get normalized MAE (mean absolute error) - should be < 0.001 for near-identical
-        local mae=$(compare -metric MAE "$OUT_DIR/output_direct.png" "$OUT_DIR/output_rib.png" /dev/null 2>&1 | grep -oE '\([0-9.e+-]+\)' | tr -d '()')
-        # Use awk for robust floating-point comparison (handles scientific notation)
-        if [ -n "$mae" ] && awk "BEGIN {exit !($mae < 0.001)}"; then
-            echo -e "${GREEN}PASS${NC} [main-roundtrip] direct vs RIB render match (MAE: $mae)"
-            ((PASS++))
-        else
-            echo -e "${RED}FAIL${NC} [main-roundtrip] images differ too much (MAE: $mae)"
-            ((FAIL++))
-        fi
-    else
-        # Fall back to binary comparison
-        if cmp -s "$OUT_DIR/output_direct.png" "$OUT_DIR/output_rib.png"; then
-            echo -e "${GREEN}PASS${NC} [main-roundtrip] direct vs RIB render identical"
-            ((PASS++))
-        else
-            echo -e "${RED}FAIL${NC} [main-roundtrip] direct vs RIB render differ"
-            ((FAIL++))
-        fi
-    fi
-}
-
 # Main
 echo "=== RIB Test Suite ==="
 echo ""
@@ -199,9 +141,6 @@ for rib in $(find "$RIB_DIR" -name "*.rib" | sort); do
     run_render_test "$rib"
     run_roundtrip_test "$rib"
 done
-
-# Run main scene roundtrip test (direct render vs RIB render)
-run_main_scene_roundtrip_test
 
 echo ""
 echo "=== Results ==="

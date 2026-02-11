@@ -30,7 +30,6 @@ LIBRIB = $(LIB_DIR)/librib.a
 LIBRIBPARSE = $(LIB_DIR)/libribparse.a
 
 # Programs
-TARGET = rhayes
 RENDER = $(BIN_DIR)/render
 CATRIB = $(BIN_DIR)/catrib
 SCENE2RIB = $(BIN_DIR)/scene2rib
@@ -39,7 +38,7 @@ SLC = $(BIN_DIR)/rh_slc
 .PHONY: all clean libs programs test test-clean generate-refs profile shaders
 
 # Default target - build all executables
-all: $(TARGET) $(RENDER) $(CATRIB) $(SCENE2RIB) $(SLC)
+all: $(RENDER) $(CATRIB) $(SCENE2RIB) $(SLC)
 
 # Build all libraries
 libs: $(LIBRH) $(LIBRI)
@@ -66,10 +65,6 @@ $(LIBRIB): $(LIBRIB_OBJS) | $(LIB_DIR)
 # RIB parsing library (reads RIB files)
 $(LIBRIBPARSE): $(LIBRIBPARSE_OBJS) | $(LIB_DIR)
 	ar rcs $@ $^
-
-# Legacy single executable (for compatibility)
-$(TARGET): $(OBJ_DIR)/main.o $(LIBRI) $(LIBSL) $(LIBRH)
-	$(CC) $(OBJ_DIR)/main.o $(LIBRI) $(LIBSL) $(LIBRH) -o $@ $(LDFLAGS)
 
 # Render program (parse RIB and render)
 $(RENDER): $(OBJ_DIR)/render.o $(LIBRIBPARSE) $(LIBRI) $(LIBSL) $(LIBRH) | $(BIN_DIR)
@@ -109,7 +104,7 @@ $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
 clean:
-	rm -rf $(OBJ_DIR) $(LIB_DIR) $(BIN_DIR) $(TARGET)
+	rm -rf $(OBJ_DIR) $(LIB_DIR) $(BIN_DIR) rhayes
 
 # Test directories
 TEST_DIR = tests
