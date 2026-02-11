@@ -1,10 +1,10 @@
 /*
- * rh_slc -- RenderMan Shading Language compiler.
+ * shader -- RenderMan Shading Language compiler.
  *
  * Reads a .sl source file, compiles it through lex -> parse -> sema -> codegen,
  * and writes the result as a .slo bytecode file.
  *
- * Usage: rh_slc [-o output.slo] input.sl
+ * Usage: shader [-o output.slo] input.sl
  */
 
 #include "rh_sl_slo.h"
@@ -19,7 +19,7 @@
 static char* read_file(const char* path) {
     FILE* f = fopen(path, "r");
     if (!f) {
-        fprintf(stderr, "rh_slc: cannot open '%s'\n", path);
+        fprintf(stderr, "shader: cannot open '%s'\n", path);
         return NULL;
     }
     fseek(f, 0, SEEK_END);
@@ -60,7 +60,7 @@ static char* default_output(const char* input) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "Usage: rh_slc [-o output.slo] input.sl\n");
+    fprintf(stderr, "Usage: shader [-o output.slo] input.sl\n");
 }
 
 int main(int argc, char** argv) {
@@ -77,12 +77,12 @@ int main(int argc, char** argv) {
             }
             output_path = argv[++i];
         } else if (argv[i][0] == '-') {
-            fprintf(stderr, "rh_slc: unknown option '%s'\n", argv[i]);
+            fprintf(stderr, "shader: unknown option '%s'\n", argv[i]);
             usage();
             return 1;
         } else {
             if (input_path) {
-                fprintf(stderr, "rh_slc: multiple input files not supported\n");
+                fprintf(stderr, "shader: multiple input files not supported\n");
                 usage();
                 return 1;
             }
@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
 
     /* Write .slo */
     if (rh_sl_slo_write(output_path, prog) != 0) {
-        fprintf(stderr, "rh_slc: failed to write '%s'\n", output_path);
+        fprintf(stderr, "shader: failed to write '%s'\n", output_path);
         rh_sl_program_free(prog);
         rh_sl_node_free(ast);
         free(source);

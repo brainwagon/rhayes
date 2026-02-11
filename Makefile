@@ -33,7 +33,7 @@ LIBRIBPARSE = $(LIB_DIR)/libribparse.a
 RENDER = $(BIN_DIR)/render
 CATRIB = $(BIN_DIR)/catrib
 SCENE2RIB = $(BIN_DIR)/scene2rib
-SLC = $(BIN_DIR)/rh_slc
+SLC = $(BIN_DIR)/shader
 
 .PHONY: all clean libs programs test test-clean generate-refs profile shaders
 
