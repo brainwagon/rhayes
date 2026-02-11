@@ -133,6 +133,9 @@ void RiBegin(RtToken name) {
     g_ctx->near_clip = 0.1f;
     g_ctx->far_clip = 1e30f;
 
+    // Default shader search path: C built-ins first, then current dir, then shaders/
+    strcpy(g_ctx->shader_searchpath, "BUILTIN:.:shaders");
+
     (void)name;
 }
 
@@ -212,6 +215,7 @@ void RiFrameBegin(RtInt frame) {
     strcpy(g_ctx->saved_options.stats_options.filename, g_ctx->stats_options.filename);
     strcpy(g_ctx->saved_options.stats_options.jsonfilename, g_ctx->stats_options.jsonfilename);
     g_ctx->saved_options.show_progress = g_ctx->show_progress;
+    strcpy(g_ctx->saved_options.shader_searchpath, g_ctx->shader_searchpath);
 
     // Track resources for cleanup
     g_ctx->lights_at_frame_begin = g_ctx->num_lights;
@@ -242,6 +246,7 @@ void RiFrameEnd(void) {
     strcpy(g_ctx->stats_options.filename, g_ctx->saved_options.stats_options.filename);
     strcpy(g_ctx->stats_options.jsonfilename, g_ctx->saved_options.stats_options.jsonfilename);
     g_ctx->show_progress = g_ctx->saved_options.show_progress;
+    strcpy(g_ctx->shader_searchpath, g_ctx->saved_options.shader_searchpath);
 
     // Remove lights created in frame
     g_ctx->num_lights = g_ctx->lights_at_frame_begin;

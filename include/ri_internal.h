@@ -307,6 +307,9 @@ typedef struct {
 
     // Progress
     bool show_progress;
+
+    // Shader search path
+    char shader_searchpath[512];
 } RiOptionsState;
 
 // --- Context Data ---
@@ -464,6 +467,9 @@ typedef struct {
         int pool_misses;                // Stats: new allocations
     } item_pool;
 
+    // Shader search path (colon-separated, with BUILTIN token)
+    char shader_searchpath[512];
+
     // Frame state (RiFrameBegin/End)
     bool frame_active;
     int frame_number;
@@ -507,6 +513,16 @@ void ri_add_geometry(RhPrimitive* p);
 #include "rh_sl_vm.h"
 RhSLProgram* sl_load_program(const char* name);
 void ri_sl_cache_clear(void);
+
+/* Try to load a shader from a single directory prefix.
+   Returns cached or newly loaded program, or NULL. */
+RhSLProgram* sl_try_load_from_dir(const char* name, const char* dir);
+
+/* Iterate search path elements. Calls cb for each element.
+   is_builtin=true for BUILTIN token, dir is prefix for file elements.
+   Callback returns true to stop. */
+typedef bool (*RiSearchPathCallback)(bool is_builtin, const char* dir, void* user);
+void ri_iterate_searchpath(RiSearchPathCallback cb, void* user);
 
 // --- Utility Functions ---
 

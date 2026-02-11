@@ -66,6 +66,20 @@ void RiOptionV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
                 }
             }
         }
+    } else if (strcmp(name, "searchpath") == 0) {
+        for (int i = 0; i < count; i++) {
+            if (!tokens[i]) continue;
+            if (strcmp(tokens[i], "shader") == 0) {
+                const char* path = (const char*)values[i];
+                if (path) {
+                    size_t len = strlen(path);
+                    if (len >= sizeof(ctx->shader_searchpath))
+                        len = sizeof(ctx->shader_searchpath) - 1;
+                    memcpy(ctx->shader_searchpath, path, len);
+                    ctx->shader_searchpath[len] = '\0';
+                }
+            }
+        }
     } else if (strcmp(name, "limits") == 0) {
         // Memory limit options for large scenes
         for (int i = 0; i < count; i++) {

@@ -96,20 +96,16 @@ static RhSLProgram* sl_compile_source(const char* source, const char* filename) 
     return prog;
 }
 
-/* Search paths for .slo and .sl files. */
-static const char* sl_search_dirs[] = { "", "shaders/", NULL };
-
-/* Load or compile a shader program by name. Returns NULL on failure. */
-RhSLProgram* sl_load_program(const char* name) {
-    RhSLProgram* prog = sl_cache_find(name);
-    if (prog) return prog;
-
+/* Try to load a shader from a single directory prefix.
+   dir should be "" for current directory or "path/" with trailing slash.
+   Returns cached or newly loaded program, or NULL if not found. */
+RhSLProgram* sl_try_load_from_dir(const char* name, const char* dir) {
+    RhSLProgram* prog;
     char path[512];
 
-    /* Search for .slo first */
-    for (int i = 0; sl_search_dirs[i]; i++) {
-        int n = snprintf(path, sizeof(path), "%s%s.slo", sl_search_dirs[i], name);
-        if (n < 0 || (size_t)n >= sizeof(path)) continue;
+    /* Try .slo first */
+    int n = snprintf(path, sizeof(path), "%s%s.slo", dir, name);
+    if (n >= 0 && (size_t)n < sizeof(path)) {
         prog = rh_sl_slo_read(path);
         if (prog) {
             sl_cache_add(name, prog);
@@ -117,10 +113,9 @@ RhSLProgram* sl_load_program(const char* name) {
         }
     }
 
-    /* Search for .sl and compile on-the-fly */
-    for (int i = 0; sl_search_dirs[i]; i++) {
-        int n = snprintf(path, sizeof(path), "%s%s.sl", sl_search_dirs[i], name);
-        if (n < 0 || (size_t)n >= sizeof(path)) continue;
+    /* Try .sl (compile on-the-fly) */
+    n = snprintf(path, sizeof(path), "%s%s.sl", dir, name);
+    if (n >= 0 && (size_t)n < sizeof(path)) {
         char* source = sl_read_file(path);
         if (source) {
             prog = sl_compile_source(source, path);
@@ -133,6 +128,135 @@ RhSLProgram* sl_load_program(const char* name) {
     }
 
     return NULL;
+}
+
+/* Parse the shader_searchpath from context and get directory elements
+   (excluding BUILTIN). Each element is converted to a directory prefix:
+   "." -> "", "shaders" -> "shaders/", etc.
+   Returns count of dirs written. */
+static int sl_get_search_dirs(const char** dirs, char dir_bufs[][256], int max_dirs) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return 0;
+
+    const char* path = ctx->shader_searchpath;
+    int count = 0;
+
+    while (*path && count < max_dirs) {
+        /* Find the end of this element (colon or end of string) */
+        const char* end = path;
+        while (*end && *end != ':') end++;
+        size_t len = (size_t)(end - path);
+
+        if (len > 0 && !(len == 7 && memcmp(path, "BUILTIN", 7) == 0)) {
+            /* Convert "." to "" (current dir), otherwise append '/' */
+            if (len == 1 && path[0] == '.') {
+                dir_bufs[count][0] = '\0';
+            } else {
+                if (len >= 255) len = 254;
+                memcpy(dir_bufs[count], path, len);
+                /* Append trailing slash if not present */
+                if (dir_bufs[count][len - 1] != '/') {
+                    dir_bufs[count][len] = '/';
+                    dir_bufs[count][len + 1] = '\0';
+                } else {
+                    dir_bufs[count][len] = '\0';
+                }
+            }
+            dirs[count] = dir_bufs[count];
+            count++;
+        }
+
+        path = (*end == ':') ? end + 1 : end;
+    }
+    return count;
+}
+
+/* Load or compile a shader program by name, searching context search path
+   directories (excluding BUILTIN). Returns NULL on failure. */
+RhSLProgram* sl_load_program(const char* name) {
+    RhSLProgram* prog = sl_cache_find(name);
+    if (prog) return prog;
+
+    const char* dirs[16];
+    char dir_bufs[16][256];
+    int ndirs = sl_get_search_dirs(dirs, dir_bufs, 16);
+
+    for (int i = 0; i < ndirs; i++) {
+        prog = sl_try_load_from_dir(name, dirs[i]);
+        if (prog) return prog;
+    }
+
+    return NULL;
+}
+
+/* --- Builtin Shader Lookup Tables --- */
+
+typedef struct {
+    const char* name;
+    RhShaderFunc func;
+} RhBuiltinShader;
+
+static const RhBuiltinShader builtin_surface_shaders[] = {
+    {"plastic",     rh_shader_surface_plastic},
+    {"matte",       rh_shader_surface_matte},
+    {"constant",    rh_shader_surface_constant},
+    {"metal",       rh_shader_surface_metal},
+    {"shinymetal",  rh_shader_surface_shinymetal},
+    {"randomgrid",  rh_shader_surface_randomgrid},
+    {"random",      rh_shader_surface_random},
+    {NULL, NULL}
+};
+
+/* Check builtin surface shader table. Returns func or NULL. */
+static RhShaderFunc builtin_surface_lookup(const char* name) {
+    for (int i = 0; builtin_surface_shaders[i].name; i++) {
+        if (strcmp(name, builtin_surface_shaders[i].name) == 0)
+            return builtin_surface_shaders[i].func;
+    }
+    return NULL;
+}
+
+/* Known builtin atmosphere shaders */
+static bool builtin_atmosphere_known(const char* name) {
+    return strcmp(name, "depthcue") == 0 ||
+           strcmp(name, "fog") == 0;
+}
+
+void ri_iterate_searchpath(RiSearchPathCallback cb, void* user) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+
+    const char* path = ctx->shader_searchpath;
+    char dir_buf[256];
+
+    while (*path) {
+        const char* end = path;
+        while (*end && *end != ':') end++;
+        size_t len = (size_t)(end - path);
+
+        if (len > 0) {
+            if (len == 7 && memcmp(path, "BUILTIN", 7) == 0) {
+                if (cb(true, NULL, user)) return;
+            } else {
+                /* Convert "." to "", otherwise append '/' */
+                if (len == 1 && path[0] == '.') {
+                    dir_buf[0] = '\0';
+                } else {
+                    if (len >= 255) len = 254;
+                    memcpy(dir_buf, path, len);
+                    if (dir_buf[len - 1] != '/') {
+                        dir_buf[len] = '/';
+                        dir_buf[len + 1] = '\0';
+                    } else {
+                        dir_buf[len] = '\0';
+                    }
+                }
+                if (cb(false, dir_buf, user)) return;
+            }
+        }
+
+        path = (*end == ':') ? end + 1 : end;
+    }
 }
 
 // --- Standard Basis Matrices ---
@@ -883,28 +1007,13 @@ void RiGeometry(RtToken type, ...) {
 
 // --- Surface Shader ---
 
-void RiSurfaceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
-    RiContextData* ctx = ri_get_ctx();
-    if (!ctx) return;
-
-    if (strcmp(name, "plastic") == 0) {
-        ri_curr()->current_surface_shader = rh_shader_surface_plastic;
-        ri_curr()->current_shader_params = NULL;
-    } else if (strcmp(name, "matte") == 0) {
-        ri_curr()->current_surface_shader = rh_shader_surface_matte;
-        ri_curr()->current_shader_params = NULL;
-    } else if (strcmp(name, "constant") == 0) {
-        ri_curr()->current_surface_shader = rh_shader_surface_constant;
-        ri_curr()->current_shader_params = NULL;
-    } else if (strcmp(name, "metal") == 0) {
-        ri_curr()->current_surface_shader = rh_shader_surface_metal;
-        ri_curr()->current_shader_params = NULL;
-    } else if (strcmp(name, "paintedplastic") == 0) {
+/* Set a C builtin surface shader. Handles paintedplastic specially for params. */
+static bool ri_set_builtin_surface(RtToken name, RhShaderFunc func,
+                                   RtToken* tokens, RtPointer* values, int count) {
+    if (strcmp(name, "paintedplastic") == 0) {
         ri_curr()->current_surface_shader = rh_shader_surface_paintedplastic;
-        // Parse paintedplastic parameters
         RhPaintedPlasticParams* params = (RhPaintedPlasticParams*)malloc(sizeof(RhPaintedPlasticParams));
         if (params) {
-            // Initialize defaults
             params->Ka = 1.0f;
             params->Kd = 0.5f;
             params->Ks = 0.5f;
@@ -919,26 +1028,24 @@ void RiSurfaceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
                 if (strcmp(token, "texturename") == 0) {
                     RtToken texname = (RtToken)values[i];
                     if (texname) {
-                        strncpy(params->texturename, texname, sizeof(params->texturename) - 1);
-                        params->texturename[sizeof(params->texturename) - 1] = '\0';
-                        // Load the texture
+                        size_t tlen = strlen(texname);
+                        if (tlen >= sizeof(params->texturename))
+                            tlen = sizeof(params->texturename) - 1;
+                        memcpy(params->texturename, texname, tlen);
+                        params->texturename[tlen] = '\0';
                         params->texture = rh_texture_load(texname, RH_TEX_RGB);
                         if (!params->texture) {
                             fprintf(stderr, "Warning: Failed to load texture '%s'\n", texname);
                         }
                     }
                 } else if (strcmp(token, "Ka") == 0) {
-                    RtFloat* val = (RtFloat*)values[i];
-                    params->Ka = *val;
+                    params->Ka = *(RtFloat*)values[i];
                 } else if (strcmp(token, "Kd") == 0) {
-                    RtFloat* val = (RtFloat*)values[i];
-                    params->Kd = *val;
+                    params->Kd = *(RtFloat*)values[i];
                 } else if (strcmp(token, "Ks") == 0) {
-                    RtFloat* val = (RtFloat*)values[i];
-                    params->Ks = *val;
+                    params->Ks = *(RtFloat*)values[i];
                 } else if (strcmp(token, "roughness") == 0) {
-                    RtFloat* val = (RtFloat*)values[i];
-                    params->roughness = *val;
+                    params->roughness = *(RtFloat*)values[i];
                 } else if (strcmp(token, "specularcolor") == 0) {
                     RtColor* col = (RtColor*)values[i];
                     params->specular_color.r = (*col)[0];
@@ -950,38 +1057,82 @@ void RiSurfaceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
         } else {
             ri_curr()->current_shader_params = NULL;
         }
-    } else if (strcmp(name, "shinymetal") == 0) {
-        ri_curr()->current_surface_shader = rh_shader_surface_shinymetal;
+        return true;
+    }
+
+    if (func) {
+        ri_curr()->current_surface_shader = func;
         ri_curr()->current_shader_params = NULL;
-    } else if (strcmp(name, "randomgrid") == 0) {
-        ri_curr()->current_surface_shader = rh_shader_surface_randomgrid;
-        ri_curr()->current_shader_params = NULL;
-    } else if (strcmp(name, "random") == 0) {
-        ri_curr()->current_surface_shader = rh_shader_surface_random;
-        ri_curr()->current_shader_params = NULL;
-    } else {
-        /* Try loading as SL shader (.slo or .sl) */
-        RhSLProgram* prog = sl_load_program(name);
-        if (prog) {
-            RhSLShader* shader = rh_sl_shader_create(prog);
-            if (shader) {
-                /* Bind RIB parameters to shader instance */
-                for (int i = 0; i < count; i++) {
-                    if (!tokens[i]) break;
-                    /* Try as float param first */
-                    float* fval = (float*)values[i];
-                    if (rh_sl_shader_set_param(shader, tokens[i], fval, 1) == 0)
-                        continue;
-                    /* Try as string param */
-                    rh_sl_shader_set_string_param(shader, tokens[i],
-                                                  (const char*)values[i]);
-                }
-                ri_curr()->current_surface_shader = rh_sl_vm_shader_exec;
-                ri_curr()->current_shader_params = shader;
-            }
-        } else {
-            fprintf(stderr, "Warning: shader '%s' not found\n", name);
+        return true;
+    }
+    return false;
+}
+
+/* Try to set an SL surface shader from a loaded program. */
+static bool ri_set_sl_surface(RhSLProgram* prog, RtToken* tokens,
+                              RtPointer* values, int count) {
+    RhSLShader* shader = rh_sl_shader_create(prog);
+    if (!shader) return false;
+
+    for (int i = 0; i < count; i++) {
+        if (!tokens[i]) break;
+        float* fval = (float*)values[i];
+        if (rh_sl_shader_set_param(shader, tokens[i], fval, 1) == 0)
+            continue;
+        rh_sl_shader_set_string_param(shader, tokens[i],
+                                      (const char*)values[i]);
+    }
+    ri_curr()->current_surface_shader = rh_sl_vm_shader_exec;
+    ri_curr()->current_shader_params = shader;
+    return true;
+}
+
+/* Callback state for RiSurfaceV search path iteration */
+typedef struct {
+    RtToken name;
+    RtToken* tokens;
+    RtPointer* values;
+    int count;
+    bool found;
+} SurfaceSearchCtx;
+
+static bool surface_search_cb(bool is_builtin, const char* dir, void* user) {
+    SurfaceSearchCtx* s = (SurfaceSearchCtx*)user;
+
+    if (is_builtin) {
+        /* Check paintedplastic specially */
+        if (strcmp(s->name, "paintedplastic") == 0) {
+            s->found = ri_set_builtin_surface(s->name, NULL,
+                                              s->tokens, s->values, s->count);
+            return s->found;
         }
+        RhShaderFunc func = builtin_surface_lookup(s->name);
+        if (func) {
+            ri_curr()->current_surface_shader = func;
+            ri_curr()->current_shader_params = NULL;
+            s->found = true;
+            return true;
+        }
+    } else {
+        RhSLProgram* prog = sl_cache_find(s->name);
+        if (!prog) prog = sl_try_load_from_dir(s->name, dir);
+        if (prog) {
+            s->found = ri_set_sl_surface(prog, s->tokens, s->values, s->count);
+            return s->found;
+        }
+    }
+    return false;
+}
+
+void RiSurfaceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+
+    SurfaceSearchCtx sctx = {name, tokens, values, count, false};
+    ri_iterate_searchpath(surface_search_cb, &sctx);
+
+    if (!sctx.found) {
+        fprintf(stderr, "Warning: shader '%s' not found\n", name);
     }
 }
 
@@ -1009,22 +1160,13 @@ void RiSurface(RtToken name, ...) {
 
 // --- Atmosphere Shader ---
 
-void RiAtmosphereV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
-    RiContextData* ctx = ri_get_ctx();
-    if (!ctx) return;
-
-    // Clear atmosphere if name is NULL or empty
-    if (!name || name[0] == '\0') {
-        ri_curr()->current_atmosphere_shader = NULL;
-        ri_curr()->current_atmosphere_params = NULL;
-        return;
-    }
-
+/* Set a C builtin atmosphere shader (depthcue or fog) with params. */
+static bool ri_set_builtin_atmosphere(RtToken name, RtToken* tokens,
+                                      RtPointer* values, int count) {
     if (strcmp(name, "depthcue") == 0) {
         ri_curr()->current_atmosphere_shader = rh_shader_atmosphere_depthcue;
         RhDepthcueParams* params = (RhDepthcueParams*)malloc(sizeof(RhDepthcueParams));
         if (params) {
-            // RenderMan defaults
             params->mindistance = 0.0f;
             params->maxdistance = 1.0f;
             params->background = (RhColor){0.0f, 0.0f, 0.0f};
@@ -1033,11 +1175,9 @@ void RiAtmosphereV(RtToken name, RtToken* tokens, RtPointer* values, int count) 
                 RtToken token = tokens[i];
                 if (!token) break;
                 if (strcmp(token, "mindistance") == 0) {
-                    RtFloat* val = (RtFloat*)values[i];
-                    params->mindistance = *val;
+                    params->mindistance = *(RtFloat*)values[i];
                 } else if (strcmp(token, "maxdistance") == 0) {
-                    RtFloat* val = (RtFloat*)values[i];
-                    params->maxdistance = *val;
+                    params->maxdistance = *(RtFloat*)values[i];
                 } else if (strcmp(token, "background") == 0) {
                     RtFloat* col = (RtFloat*)values[i];
                     params->background.r = col[0];
@@ -1049,6 +1189,7 @@ void RiAtmosphereV(RtToken name, RtToken* tokens, RtPointer* values, int count) 
         } else {
             ri_curr()->current_atmosphere_params = NULL;
         }
+        return true;
     } else if (strcmp(name, "fog") == 0) {
         ri_curr()->current_atmosphere_shader = rh_shader_atmosphere_fog;
         RhFogParams* params = (RhFogParams*)malloc(sizeof(RhFogParams));
@@ -1060,8 +1201,7 @@ void RiAtmosphereV(RtToken name, RtToken* tokens, RtPointer* values, int count) 
                 RtToken token = tokens[i];
                 if (!token) break;
                 if (strcmp(token, "distance") == 0) {
-                    RtFloat* val = (RtFloat*)values[i];
-                    params->distance = *val;
+                    params->distance = *(RtFloat*)values[i];
                 } else if (strcmp(token, "background") == 0) {
                     RtFloat* col = (RtFloat*)values[i];
                     params->background.r = col[0];
@@ -1073,7 +1213,67 @@ void RiAtmosphereV(RtToken name, RtToken* tokens, RtPointer* values, int count) 
         } else {
             ri_curr()->current_atmosphere_params = NULL;
         }
+        return true;
+    }
+    return false;
+}
+
+/* Callback state for RiAtmosphereV search path iteration */
+typedef struct {
+    RtToken name;
+    RtToken* tokens;
+    RtPointer* values;
+    int count;
+    bool found;
+} AtmosphereSearchCtx;
+
+static bool atmosphere_search_cb(bool is_builtin, const char* dir, void* user) {
+    AtmosphereSearchCtx* s = (AtmosphereSearchCtx*)user;
+
+    if (is_builtin) {
+        if (builtin_atmosphere_known(s->name)) {
+            s->found = ri_set_builtin_atmosphere(s->name, s->tokens,
+                                                 s->values, s->count);
+            return s->found;
+        }
     } else {
+        RhSLProgram* prog = sl_cache_find(s->name);
+        if (!prog) prog = sl_try_load_from_dir(s->name, dir);
+        if (prog) {
+            RhSLShader* shader = rh_sl_shader_create(prog);
+            if (shader) {
+                for (int i = 0; i < s->count; i++) {
+                    if (!s->tokens[i]) break;
+                    float* fval = (float*)s->values[i];
+                    if (rh_sl_shader_set_param(shader, s->tokens[i], fval, 1) == 0)
+                        continue;
+                    rh_sl_shader_set_string_param(shader, s->tokens[i],
+                                                  (const char*)s->values[i]);
+                }
+                ri_curr()->current_atmosphere_shader = rh_sl_vm_shader_exec;
+                ri_curr()->current_atmosphere_params = shader;
+                s->found = true;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void RiAtmosphereV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+
+    if (!name || name[0] == '\0') {
+        ri_curr()->current_atmosphere_shader = NULL;
+        ri_curr()->current_atmosphere_params = NULL;
+        return;
+    }
+
+    AtmosphereSearchCtx sctx = {name, tokens, values, count, false};
+    ri_iterate_searchpath(atmosphere_search_cb, &sctx);
+
+    if (!sctx.found) {
         fprintf(stderr, "Warning: Unknown atmosphere shader '%s'\n", name);
     }
 }
