@@ -136,7 +136,11 @@ void RiBegin(RtToken name) {
     (void)name;
 }
 
+/* Defined in ri_primitive.c -- frees cached SL shader programs */
+extern void ri_sl_cache_clear(void);
+
 void RiEnd(void) {
+    ri_sl_cache_clear();
     if (g_ctx) {
         if (g_ctx->raster) rh_raster_destroy(g_ctx->raster);
         if (g_ctx->all_items) {

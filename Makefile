@@ -16,12 +16,16 @@ LIBRH_OBJS = $(OBJ_DIR)/rh_math.o $(OBJ_DIR)/rh_geometry.o $(OBJ_DIR)/rh_shader.
 LIBRI_OBJS = $(OBJ_DIR)/ri_context.o $(OBJ_DIR)/ri_state.o $(OBJ_DIR)/ri_light.o \
              $(OBJ_DIR)/ri_primitive.o $(OBJ_DIR)/ri_render.o $(OBJ_DIR)/ri_options.o \
              $(OBJ_DIR)/ri_declare.o
+LIBSL_OBJS = $(OBJ_DIR)/rh_sl_lex.o $(OBJ_DIR)/rh_sl_parse.o \
+             $(OBJ_DIR)/rh_sl_sema.o $(OBJ_DIR)/rh_sl_codegen.o \
+             $(OBJ_DIR)/rh_sl_vm.o $(OBJ_DIR)/rh_sl_slo.o $(OBJ_DIR)/rh_noise.o
 LIBRIB_OBJS = $(OBJ_DIR)/rib_output.o
 LIBRIBPARSE_OBJS = $(OBJ_DIR)/rib_parse.o
 
 # Libraries
 LIBRH = $(LIB_DIR)/librh.a
 LIBRI = $(LIB_DIR)/libri.a
+LIBSL = $(LIB_DIR)/libsl.a
 LIBRIB = $(LIB_DIR)/librib.a
 LIBRIBPARSE = $(LIB_DIR)/libribparse.a
 
@@ -30,11 +34,12 @@ TARGET = rhayes
 RENDER = $(BIN_DIR)/render
 CATRIB = $(BIN_DIR)/catrib
 SCENE2RIB = $(BIN_DIR)/scene2rib
+SLC = $(BIN_DIR)/rh_slc
 
-.PHONY: all clean libs programs test test-clean generate-refs profile
+.PHONY: all clean libs programs test test-clean generate-refs profile shaders
 
 # Default target - build all executables
-all: $(TARGET) $(RENDER) $(CATRIB) $(SCENE2RIB)
+all: $(TARGET) $(RENDER) $(CATRIB) $(SCENE2RIB) $(SLC)
 
 # Build all libraries
 libs: $(LIBRH) $(LIBRI)
@@ -50,6 +55,10 @@ $(LIBRH): $(LIBRH_OBJS) | $(LIB_DIR)
 $(LIBRI): $(LIBRI_OBJS) | $(LIB_DIR)
 	ar rcs $@ $^
 
+# Shading language library (compiler, VM, noise)
+$(LIBSL): $(LIBSL_OBJS) | $(LIB_DIR)
+	ar rcs $@ $^
+
 # RIB output library (writes RIB files)
 $(LIBRIB): $(LIBRIB_OBJS) | $(LIB_DIR)
 	ar rcs $@ $^
@@ -59,11 +68,15 @@ $(LIBRIBPARSE): $(LIBRIBPARSE_OBJS) | $(LIB_DIR)
 	ar rcs $@ $^
 
 # Legacy single executable (for compatibility)
-$(TARGET): $(OBJ_DIR)/main.o $(LIBRI) $(LIBRH)
-	$(CC) $(OBJ_DIR)/main.o $(LIBRI) $(LIBRH) -o $@ $(LDFLAGS)
+$(TARGET): $(OBJ_DIR)/main.o $(LIBRI) $(LIBSL) $(LIBRH)
+	$(CC) $(OBJ_DIR)/main.o $(LIBRI) $(LIBSL) $(LIBRH) -o $@ $(LDFLAGS)
 
 # Render program (parse RIB and render)
-$(RENDER): $(OBJ_DIR)/render.o $(LIBRIBPARSE) $(LIBRI) $(LIBRH) | $(BIN_DIR)
+$(RENDER): $(OBJ_DIR)/render.o $(LIBRIBPARSE) $(LIBRI) $(LIBSL) $(LIBRH) | $(BIN_DIR)
+	$(CC) $^ -o $@ $(LDFLAGS)
+
+# Shader compiler
+$(SLC): $(OBJ_DIR)/rh_slc.o $(LIBSL) $(LIBRH) | $(BIN_DIR)
 	$(CC) $^ -o $@ $(LDFLAGS)
 
 # Catrib program (parse RIB and write RIB)
@@ -124,6 +137,16 @@ generate-refs: $(RENDER)
 # Clean test output
 test-clean:
 	rm -rf $(TEST_OUT)
+
+# Compile all standard shaders
+shaders: $(SLC)
+	@for sl in shaders/*.sl; do \
+		slo="$${sl%.sl}.slo"; \
+		if [ ! -f "$$slo" ] || [ "$$sl" -nt "$$slo" ]; then \
+			echo "Compiling $$sl"; \
+			$(SLC) "$$sl"; \
+		fi; \
+	done
 
 # Build with profiling enabled (for gprof analysis)
 profile: CFLAGS += -pg -fno-omit-frame-pointer

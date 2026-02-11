@@ -7,6 +7,133 @@
 
 #include "ri_internal.h"
 #include "teapot_data.h"
+#include "rh_sl_slo.h"
+#include "rh_sl_vm.h"
+#include "rh_sl_codegen.h"
+#include "rh_sl_parse.h"
+#include "rh_sl_sema.h"
+#include <stdio.h>
+#include <string.h>
+
+/* --- SL Shader Program Cache --- */
+
+#define SL_CACHE_MAX 64
+
+static struct {
+    char name[64];
+    RhSLProgram* prog;
+} sl_cache[SL_CACHE_MAX];
+static int sl_cache_count = 0;
+
+static RhSLProgram* sl_cache_find(const char* name) {
+    for (int i = 0; i < sl_cache_count; i++) {
+        if (strcmp(sl_cache[i].name, name) == 0)
+            return sl_cache[i].prog;
+    }
+    return NULL;
+}
+
+static void sl_cache_add(const char* name, RhSLProgram* prog) {
+    if (sl_cache_count >= SL_CACHE_MAX) return;
+    size_t len = strlen(name);
+    if (len >= 64) len = 63;
+    memcpy(sl_cache[sl_cache_count].name, name, len);
+    sl_cache[sl_cache_count].name[len] = '\0';
+    sl_cache[sl_cache_count].prog = prog;
+    sl_cache_count++;
+}
+
+void ri_sl_cache_clear(void) {
+    for (int i = 0; i < sl_cache_count; i++) {
+        rh_sl_program_free(sl_cache[i].prog);
+    }
+    sl_cache_count = 0;
+}
+
+/* Try to read file into malloc'd buffer; returns NULL if not found. */
+static char* sl_read_file(const char* path) {
+    FILE* f = fopen(path, "r");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char* buf = (char*)malloc((size_t)len + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t nread = fread(buf, 1, (size_t)len, f);
+    buf[nread] = '\0';
+    fclose(f);
+    return buf;
+}
+
+/* Compile a .sl source string to an RhSLProgram. Returns NULL on error. */
+static RhSLProgram* sl_compile_source(const char* source, const char* filename) {
+    RhSLParser parser;
+    rh_sl_parse_init(&parser, source);
+    RhSLNode* ast = rh_sl_parse(&parser);
+    if (!ast || parser.num_errors > 0) {
+        for (int i = 0; i < parser.num_errors; i++)
+            fprintf(stderr, "%s: %s\n", filename, parser.errors[i]);
+        if (ast) rh_sl_node_free(ast);
+        return NULL;
+    }
+
+    RhSLSema sema;
+    rh_sl_sema_init(&sema);
+    if (rh_sl_sema_analyze(&sema, ast) != 0) {
+        for (int i = 0; i < sema.num_errors; i++)
+            fprintf(stderr, "%s: %s\n", filename, sema.errors[i]);
+        rh_sl_node_free(ast);
+        return NULL;
+    }
+
+    RhSLCodegenErrors errs;
+    RhSLProgram* prog = rh_sl_codegen(ast, &errs);
+    if (!prog) {
+        for (int i = 0; i < errs.num_errors; i++)
+            fprintf(stderr, "%s: %s\n", filename, errs.errors[i]);
+    }
+    rh_sl_node_free(ast);
+    return prog;
+}
+
+/* Search paths for .slo and .sl files. */
+static const char* sl_search_dirs[] = { "", "shaders/", NULL };
+
+/* Load or compile a shader program by name. Returns NULL on failure. */
+static RhSLProgram* sl_load_program(const char* name) {
+    RhSLProgram* prog = sl_cache_find(name);
+    if (prog) return prog;
+
+    char path[512];
+
+    /* Search for .slo first */
+    for (int i = 0; sl_search_dirs[i]; i++) {
+        int n = snprintf(path, sizeof(path), "%s%s.slo", sl_search_dirs[i], name);
+        if (n < 0 || (size_t)n >= sizeof(path)) continue;
+        prog = rh_sl_slo_read(path);
+        if (prog) {
+            sl_cache_add(name, prog);
+            return prog;
+        }
+    }
+
+    /* Search for .sl and compile on-the-fly */
+    for (int i = 0; sl_search_dirs[i]; i++) {
+        int n = snprintf(path, sizeof(path), "%s%s.sl", sl_search_dirs[i], name);
+        if (n < 0 || (size_t)n >= sizeof(path)) continue;
+        char* source = sl_read_file(path);
+        if (source) {
+            prog = sl_compile_source(source, path);
+            free(source);
+            if (prog) {
+                sl_cache_add(name, prog);
+                return prog;
+            }
+        }
+    }
+
+    return NULL;
+}
 
 // --- Standard Basis Matrices ---
 
@@ -832,6 +959,29 @@ void RiSurfaceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
     } else if (strcmp(name, "random") == 0) {
         ri_curr()->current_surface_shader = rh_shader_surface_random;
         ri_curr()->current_shader_params = NULL;
+    } else {
+        /* Try loading as SL shader (.slo or .sl) */
+        RhSLProgram* prog = sl_load_program(name);
+        if (prog) {
+            RhSLShader* shader = rh_sl_shader_create(prog);
+            if (shader) {
+                /* Bind RIB parameters to shader instance */
+                for (int i = 0; i < count; i++) {
+                    if (!tokens[i]) break;
+                    /* Try as float param first */
+                    float* fval = (float*)values[i];
+                    if (rh_sl_shader_set_param(shader, tokens[i], fval, 1) == 0)
+                        continue;
+                    /* Try as string param */
+                    rh_sl_shader_set_string_param(shader, tokens[i],
+                                                  (const char*)values[i]);
+                }
+                ri_curr()->current_surface_shader = rh_sl_vm_shader_exec;
+                ri_curr()->current_shader_params = shader;
+            }
+        } else {
+            fprintf(stderr, "Warning: shader '%s' not found\n", name);
+        }
     }
 }
 
