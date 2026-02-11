@@ -51,6 +51,9 @@ typedef struct {
     int shadow_samples;
     float shadow_bias;
     float shadow_blur;
+    // VM light shader
+    RhShaderFunc light_shader;
+    void* light_shader_params;
 } RhLight_ShaderView;
 
 static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor* diff, RhColor* spec, float roughness) {

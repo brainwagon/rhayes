@@ -37,6 +37,11 @@ typedef struct {
     RhPrimVar* primvars;  // Array of primitive variables from grid
     int num_primvars;     // Number of primitive variables
 
+    // Light shader I/O
+    RhVec3 Ps;            // Surface point being illuminated (input for light shaders)
+    RhVec3 L_out;         // Light direction output (from light shader)
+    RhColor Cl_out;       // Light color output (from light shader)
+
 } RhShaderContext;
 
 // Primvar lookup helper for shaders

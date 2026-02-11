@@ -5,6 +5,7 @@
  */
 
 #include "ri_internal.h"
+#include "rh_sl_vm.h"
 
 RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
     RiContextData* ctx = ri_get_ctx();
@@ -29,6 +30,8 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
     l->shadow_samples = 16;
     l->shadow_bias = 0.05f;  // Bias in world units (5cm default)
     l->shadow_blur = 1.0f;
+    l->light_shader = NULL;
+    l->light_shader_params = NULL;
 
     // Store shadow map filename temporarily for loading after parsing
     const char* shadowmap_file = NULL;
@@ -92,6 +95,33 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
     l->position = rh_mat4_mul_point(ri_curr()->transform, l->position);
     RhVec3 to_world = rh_mat4_mul_point(ri_curr()->transform, to);
     l->direction = rh_vec3_normalize(rh_vec3_sub(l->position, to_world));
+
+    // Try loading an SL light shader (.slo or .sl)
+    RhSLProgram* prog = sl_load_program(name);
+    if (prog && prog->shader_type == RH_SL_SHADER_LIGHT) {
+        RhSLShader* shader = rh_sl_shader_create(prog);
+        if (shader) {
+            /* Bind RiLightSource parameters to shader params */
+            float fval;
+            fval = l->intensity;
+            rh_sl_shader_set_param(shader, "intensity", &fval, 1);
+            float lc[3] = {l->color.r, l->color.g, l->color.b};
+            rh_sl_shader_set_param(shader, "lightcolor", lc, 3);
+            float from[3] = {l->position.x, l->position.y, l->position.z};
+            rh_sl_shader_set_param(shader, "from", from, 3);
+            float to_arr[3] = {to_world.x, to_world.y, to_world.z};
+            rh_sl_shader_set_param(shader, "to", to_arr, 3);
+            fval = l->coneangle;
+            rh_sl_shader_set_param(shader, "coneangle", &fval, 1);
+            fval = l->conedeltaangle;
+            rh_sl_shader_set_param(shader, "conedeltaangle", &fval, 1);
+            fval = l->beamdistribution;
+            rh_sl_shader_set_param(shader, "beamdistribution", &fval, 1);
+
+            l->light_shader = rh_sl_vm_shader_exec;
+            l->light_shader_params = shader;
+        }
+    }
 
     return RI_NULL;
 }

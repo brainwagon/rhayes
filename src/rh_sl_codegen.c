@@ -1348,6 +1348,29 @@ static void emit_stmt(CodegenState* cg, const RhSLNode* node) {
         if (node->u.illuminate.position)
             pos_reg = emit_expr(cg, node->u.illuminate.position);
 
+        /* 3-arg illuminate(from, axis, angle): emit explicit cone check */
+        if (node->u.illuminate.axis && node->u.illuminate.angle) {
+            int axis_reg = emit_expr(cg, node->u.illuminate.axis);
+            int angle_reg = emit_expr(cg, node->u.illuminate.angle);
+            /* L_dir = Ps - from */
+            int tmp_l = alloc_reg(cg, 3);
+            emit(cg, RH_SL_INSTR(OP_VSUB, (uint16_t)tmp_l, (uint16_t)R_PS, (uint16_t)pos_reg));
+            /* normalize L_dir */
+            int tmp_ln = alloc_reg(cg, 3);
+            emit(cg, RH_SL_INSTR(OP_NORMALIZE, (uint16_t)tmp_ln, (uint16_t)tmp_l, 0));
+            /* cos_angle = dot(L_norm, axis) */
+            int tmp_cos = alloc_reg(cg, 1);
+            emit(cg, RH_SL_INSTR(OP_DOT, (uint16_t)tmp_cos, (uint16_t)tmp_ln, (uint16_t)axis_reg));
+            /* actual_angle = acos(cos_angle) */
+            int tmp_angle = alloc_reg(cg, 1);
+            emit(cg, RH_SL_INSTR(OP_FACOS, (uint16_t)tmp_angle, (uint16_t)tmp_cos, 0));
+            /* test: actual_angle > coneangle? */
+            int tmp_cmp = alloc_reg(cg, 1);
+            emit(cg, RH_SL_INSTR(OP_FGT, (uint16_t)tmp_cmp, (uint16_t)tmp_angle, (uint16_t)angle_reg));
+            /* skip illuminate body if outside cone */
+            emit_jump(cg, OP_JUMP_IF, after_end, (uint16_t)tmp_cmp);
+        }
+
         emit_jump(cg, OP_ILLUMINATE_BEGIN, after_end, (uint16_t)pos_reg);
 
         label_define(cg, body_start_label);
@@ -1363,7 +1386,32 @@ static void emit_stmt(CodegenState* cg, const RhSLNode* node) {
         int after_end = label_new(cg);
         int body_start_label = label_new(cg);
 
-        emit_jump(cg, OP_SOLAR_BEGIN, after_end, 0);
+        int axis_reg = 0;
+        if (node->u.solar.axis) {
+            axis_reg = emit_expr(cg, node->u.solar.axis);
+            /* If angle is present and nonzero, emit cone check */
+            if (node->u.solar.angle) {
+                int angle_reg = emit_expr(cg, node->u.solar.angle);
+                /* L_dir = normalize(Ps - 0) -- direction from origin to Ps */
+                int tmp_ln = alloc_reg(cg, 3);
+                emit(cg, RH_SL_INSTR(OP_NORMALIZE, (uint16_t)tmp_ln, (uint16_t)R_PS, 0));
+                /* neg_axis = -axis (solar L = -axis) */
+                int neg_axis = alloc_reg(cg, 3);
+                emit(cg, RH_SL_INSTR(OP_VNEG, (uint16_t)neg_axis, (uint16_t)axis_reg, 0));
+                /* cos_angle = dot(Ps_norm, neg_axis) */
+                int tmp_cos = alloc_reg(cg, 1);
+                emit(cg, RH_SL_INSTR(OP_DOT, (uint16_t)tmp_cos, (uint16_t)tmp_ln, (uint16_t)neg_axis));
+                /* actual_angle = acos(cos_angle) */
+                int tmp_angle = alloc_reg(cg, 1);
+                emit(cg, RH_SL_INSTR(OP_FACOS, (uint16_t)tmp_angle, (uint16_t)tmp_cos, 0));
+                /* test: actual_angle > cone_angle? */
+                int tmp_cmp = alloc_reg(cg, 1);
+                emit(cg, RH_SL_INSTR(OP_FGT, (uint16_t)tmp_cmp, (uint16_t)tmp_angle, (uint16_t)angle_reg));
+                emit_jump(cg, OP_JUMP_IF, after_end, (uint16_t)tmp_cmp);
+            }
+        }
+
+        emit_jump(cg, OP_SOLAR_BEGIN, after_end, (uint16_t)axis_reg);
 
         label_define(cg, body_start_label);
         if (node->u.solar.body)

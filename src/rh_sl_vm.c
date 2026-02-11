@@ -25,6 +25,8 @@ typedef struct {
     int shadow_samples;
     float shadow_bias;
     float shadow_blur;
+    RhShaderFunc light_shader;
+    void* light_shader_params;
 } RhSLLight;
 
 /* ------------------------------------------------------------------ */
@@ -364,9 +366,61 @@ static int rh_sl_vm_advance_light(RhSLExecState* state, float* r) {
     if (!state->light_list) return 0;
     RhSLLight* lights = (RhSLLight*)state->light_list;
     while (state->current_light < state->num_lights) {
+        RhSLLight* light = &lights[state->current_light];
+
+        if (light->light_shader != NULL) {
+            /* Execute VM light shader */
+            RhShaderContext ctx_light;
+            memset(&ctx_light, 0, sizeof(ctx_light));
+            ctx_light.Ps.x = r[R_P+0];
+            ctx_light.Ps.y = r[R_P+1];
+            ctx_light.Ps.z = r[R_P+2];
+            ctx_light.N.x = r[R_N+0];
+            ctx_light.N.y = r[R_N+1];
+            ctx_light.N.z = r[R_N+2];
+            if (state->shader_ctx)
+                ctx_light.P_world = state->shader_ctx->P_world;
+            ctx_light.light_list = NULL;
+            ctx_light.num_lights = 0;
+
+            light->light_shader(&ctx_light, light->light_shader_params);
+
+            float Lx = ctx_light.L_out.x;
+            float Ly = ctx_light.L_out.y;
+            float Lz = ctx_light.L_out.z;
+            float Clr = ctx_light.Cl_out.r;
+            float Clg = ctx_light.Cl_out.g;
+            float Clb = ctx_light.Cl_out.b;
+
+            /* Skip ambient lights (L == 0) */
+            float Llen2 = Lx*Lx + Ly*Ly + Lz*Lz;
+            if (Llen2 < 1e-24f) {
+                state->current_light++;
+                continue;
+            }
+
+            /* Normalize L for hemisphere test */
+            float inv_len = 1.0f / sqrtf(Llen2);
+            float Ln_x = Lx * inv_len;
+            float Ln_y = Ly * inv_len;
+            float Ln_z = Lz * inv_len;
+
+            /* Hemisphere test: dot(L_normalized, N) > 0 */
+            float n_dot_l = r[R_N+0]*Ln_x + r[R_N+1]*Ln_y + r[R_N+2]*Ln_z;
+            if (n_dot_l <= 0.0f) {
+                state->current_light++;
+                continue;
+            }
+
+            r[R_L+0] = Ln_x; r[R_L+1] = Ln_y; r[R_L+2] = Ln_z;
+            r[R_CL+0] = Clr; r[R_CL+1] = Clg; r[R_CL+2] = Clb;
+            state->current_light++;
+            return 1;
+        }
+
+        /* C fallback path */
         float L[3], Cl[3];
-        if (evaluate_light(&lights[state->current_light], r, L, Cl,
-                           state->shader_ctx)) {
+        if (evaluate_light(light, r, L, Cl, state->shader_ctx)) {
             r[R_L+0] = L[0]; r[R_L+1] = L[1]; r[R_L+2] = L[2];
             r[R_CL+0] = Cl[0]; r[R_CL+1] = Cl[1]; r[R_CL+2] = Cl[2];
             state->current_light++;
@@ -705,11 +759,46 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
             break;
         }
 
-        /* ---- Not yet implemented ---- */
-        case OP_ILLUMINATE_BEGIN:
+        /* ---- Light shader blocks (illuminate / solar) ---- */
+        case OP_ILLUMINATE_BEGIN: {
+            /*
+             * dst = instruction after block end (skip target)
+             * src1 = register of light position (from)
+             * Compute L = Ps - from, store in R_L. Fall through to body.
+             */
+            float Lx = r[R_PS+0] - r[src1+0];
+            float Ly = r[R_PS+1] - r[src1+1];
+            float Lz = r[R_PS+2] - r[src1+2];
+            r[R_L+0] = Lx;
+            r[R_L+1] = Ly;
+            r[R_L+2] = Lz;
+            /* Fall through to body */
+            break;
+        }
+
         case OP_ILLUMINATE_END:
-        case OP_SOLAR_BEGIN:
+            /* Single-execution block (not a loop). Just fall through. */
+            break;
+
+        case OP_SOLAR_BEGIN: {
+            /*
+             * dst = instruction after block end (skip target)
+             * src1 = register of axis direction (or 0 if no axis)
+             * Set L = -axis, fall through to body.
+             */
+            if (src1 != 0) {
+                r[R_L+0] = -r[src1+0];
+                r[R_L+1] = -r[src1+1];
+                r[R_L+2] = -r[src1+2];
+            }
+            /* Fall through to body */
+            break;
+        }
+
         case OP_SOLAR_END:
+            /* Single-execution block. Just fall through. */
+            break;
+
         case OP_ENVMAP:
         case OP_NOISE1:    r[dst] = rh_noise1(r[src1]); break;
         case OP_NOISE2:    r[dst] = rh_noise2(r[src1], r[src2]); break;
@@ -780,6 +869,7 @@ void rh_sl_vm_shader_exec(RhShaderContext* ctx, void* params) {
     regs[R_DU] = ctx->du;
     regs[R_DV] = ctx->dv;
     regs[R_PW+0] = ctx->P_world.x; regs[R_PW+1] = ctx->P_world.y; regs[R_PW+2] = ctx->P_world.z;
+    regs[R_PS+0] = ctx->Ps.x; regs[R_PS+1] = ctx->Ps.y; regs[R_PS+2] = ctx->Ps.z;
 
     /* Load shader instance parameters */
     if (shader->param_values) {
@@ -826,6 +916,12 @@ void rh_sl_vm_shader_exec(RhShaderContext* ctx, void* params) {
     if (prog->shader_type == RH_SL_SHADER_DISPLACEMENT) {
         ctx->P.x = regs[R_P+0]; ctx->P.y = regs[R_P+1]; ctx->P.z = regs[R_P+2];
         ctx->N.x = regs[R_N+0]; ctx->N.y = regs[R_N+1]; ctx->N.z = regs[R_N+2];
+    }
+
+    /* For light shaders, write back L and Cl */
+    if (prog->shader_type == RH_SL_SHADER_LIGHT) {
+        ctx->L_out.x = regs[R_L+0]; ctx->L_out.y = regs[R_L+1]; ctx->L_out.z = regs[R_L+2];
+        ctx->Cl_out.r = regs[R_CL+0]; ctx->Cl_out.g = regs[R_CL+1]; ctx->Cl_out.b = regs[R_CL+2];
     }
 
     if (regs != stack_regs)

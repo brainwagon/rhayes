@@ -100,7 +100,7 @@ static RhSLProgram* sl_compile_source(const char* source, const char* filename) 
 static const char* sl_search_dirs[] = { "", "shaders/", NULL };
 
 /* Load or compile a shader program by name. Returns NULL on failure. */
-static RhSLProgram* sl_load_program(const char* name) {
+RhSLProgram* sl_load_program(const char* name) {
     RhSLProgram* prog = sl_cache_find(name);
     if (prog) return prog;
 

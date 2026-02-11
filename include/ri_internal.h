@@ -242,6 +242,9 @@ typedef struct {
     int shadow_samples;         // Number of PCF samples (default 16)
     float shadow_bias;          // Depth bias (default 0.005)
     float shadow_blur;          // Filter size multiplier (default 1.0)
+    // VM light shader (NULL for C fallback via evaluate_light)
+    RhShaderFunc light_shader;
+    void* light_shader_params;
 } RhLight;
 
 // --- Grid Scratch Buffers ---
@@ -497,6 +500,13 @@ void ri_render_item_destroy(RhRenderItem* item);
 // Defined in ri_primitive.c
 
 void ri_add_geometry(RhPrimitive* p);
+
+// --- Shader Loading ---
+// Defined in ri_primitive.c
+
+#include "rh_sl_vm.h"
+RhSLProgram* sl_load_program(const char* name);
+void ri_sl_cache_clear(void);
 
 // --- Utility Functions ---
 
