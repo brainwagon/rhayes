@@ -1361,10 +1361,10 @@ static void emit_stmt(CodegenState* cg, const RhSLNode* node) {
             /* cos_angle = dot(L_norm, axis) */
             int tmp_cos = alloc_reg(cg, 1);
             emit(cg, RH_SL_INSTR(OP_DOT, (uint16_t)tmp_cos, (uint16_t)tmp_ln, (uint16_t)axis_reg));
-            /* actual_angle = acos(cos_angle) */
+            /* actual_angle = acos(cos_angle) -- radians (SL uses radians) */
             int tmp_angle = alloc_reg(cg, 1);
             emit(cg, RH_SL_INSTR(OP_FACOS, (uint16_t)tmp_angle, (uint16_t)tmp_cos, 0));
-            /* test: actual_angle > coneangle? */
+            /* test: actual_angle > coneangle? (both in radians) */
             int tmp_cmp = alloc_reg(cg, 1);
             emit(cg, RH_SL_INSTR(OP_FGT, (uint16_t)tmp_cmp, (uint16_t)tmp_angle, (uint16_t)angle_reg));
             /* skip illuminate body if outside cone */
@@ -1401,10 +1401,10 @@ static void emit_stmt(CodegenState* cg, const RhSLNode* node) {
                 /* cos_angle = dot(Ps_norm, neg_axis) */
                 int tmp_cos = alloc_reg(cg, 1);
                 emit(cg, RH_SL_INSTR(OP_DOT, (uint16_t)tmp_cos, (uint16_t)tmp_ln, (uint16_t)neg_axis));
-                /* actual_angle = acos(cos_angle) */
+                /* actual_angle = acos(cos_angle) -- radians (SL uses radians) */
                 int tmp_angle = alloc_reg(cg, 1);
                 emit(cg, RH_SL_INSTR(OP_FACOS, (uint16_t)tmp_angle, (uint16_t)tmp_cos, 0));
-                /* test: actual_angle > cone_angle? */
+                /* test: actual_angle > cone_angle? (both in radians) */
                 int tmp_cmp = alloc_reg(cg, 1);
                 emit(cg, RH_SL_INSTR(OP_FGT, (uint16_t)tmp_cmp, (uint16_t)tmp_angle, (uint16_t)angle_reg));
                 emit_jump(cg, OP_JUMP_IF, after_end, (uint16_t)tmp_cmp);
@@ -1516,6 +1516,13 @@ static float eval_const_float(const RhSLNode* node) {
         return node->u.float_lit.value;
     if (node->node_type == SL_NODE_UNOP && node->u.unop.op == SL_UOP_NEG)
         return -eval_const_float(node->u.unop.operand);
+    if (node->node_type == SL_NODE_CALL && node->u.call.args) {
+        float arg = eval_const_float(node->u.call.args);
+        if (strcmp(node->u.call.name, "radians") == 0)
+            return arg * (float)(M_PI / 180.0);
+        if (strcmp(node->u.call.name, "degrees") == 0)
+            return arg * (float)(180.0 / M_PI);
+    }
     return 0.0f;
 }
 

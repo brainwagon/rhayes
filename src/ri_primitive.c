@@ -108,6 +108,7 @@ RhSLProgram* sl_try_load_from_dir(const char* name, const char* dir) {
     if (n >= 0 && (size_t)n < sizeof(path)) {
         prog = rh_sl_slo_read(path);
         if (prog) {
+            fprintf(stderr, "shader: loaded '%s' from '%s'\n", name, path);
             sl_cache_add(name, prog);
             return prog;
         }
@@ -118,9 +119,11 @@ RhSLProgram* sl_try_load_from_dir(const char* name, const char* dir) {
     if (n >= 0 && (size_t)n < sizeof(path)) {
         char* source = sl_read_file(path);
         if (source) {
+            fprintf(stderr, "shader: compiling '%s' from '%s'\n", name, path);
             prog = sl_compile_source(source, path);
             free(source);
             if (prog) {
+                fprintf(stderr, "shader: loaded '%s' from '%s'\n", name, path);
                 sl_cache_add(name, prog);
                 return prog;
             }
@@ -1104,10 +1107,13 @@ static bool surface_search_cb(bool is_builtin, const char* dir, void* user) {
         if (strcmp(s->name, "paintedplastic") == 0) {
             s->found = ri_set_builtin_surface(s->name, NULL,
                                               s->tokens, s->values, s->count);
+            if (s->found)
+                fprintf(stderr, "shader: loaded builtin surface '%s'\n", s->name);
             return s->found;
         }
         RhShaderFunc func = builtin_surface_lookup(s->name);
         if (func) {
+            fprintf(stderr, "shader: loaded builtin surface '%s'\n", s->name);
             ri_curr()->current_surface_shader = func;
             ri_curr()->current_shader_params = NULL;
             s->found = true;
@@ -1234,6 +1240,8 @@ static bool atmosphere_search_cb(bool is_builtin, const char* dir, void* user) {
         if (builtin_atmosphere_known(s->name)) {
             s->found = ri_set_builtin_atmosphere(s->name, s->tokens,
                                                  s->values, s->count);
+            if (s->found)
+                fprintf(stderr, "shader: loaded builtin atmosphere '%s'\n", s->name);
             return s->found;
         }
     } else {

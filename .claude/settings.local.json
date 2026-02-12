@@ -28,7 +28,17 @@
       "Bash(timeout 5 ./rhayes:*)",
       "Bash(time timeout 60 ./rhayes:*)",
       "Bash(time:*)",
-      "Bash(timeout 10 ./rhayes:*)"
+      "Bash(timeout 10 ./rhayes:*)",
+      "Bash(bin/rh_slc:*)",
+      "Bash(gdb:*)",
+      "Bash(grep:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(bin/shader:*)",
+      "Bash(git push:*)",
+      "Bash(RHAYES_SHADER_PATH=\"scenes/teapot:BUILTIN:.:shaders\" bin/render:*)",
+      "Bash(RHAYES_SHADER_PATH=\".:shaders:BUILTIN\" bin/render:*)",
+      "Bash(tests/test_sl_codegen)"
     ]
   }
 }

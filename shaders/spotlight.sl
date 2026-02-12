@@ -1,8 +1,8 @@
 light spotlight(float intensity = 1; color lightcolor = 1;
                 point from = point "shader" (0, 0, 0);
                 point to = point "shader" (0, 0, 1);
-                float coneangle = 30;
-                float conedeltaangle = 5;
+                float coneangle = radians(30);
+                float conedeltaangle = radians(5);
                 float beamdistribution = 2) {
     illuminate(from, normalize(to - from), coneangle + conedeltaangle) {
         vector Lnorm = normalize(Ps - from);

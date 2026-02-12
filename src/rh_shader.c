@@ -78,78 +78,111 @@ static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor
 
         // Ambient light - contributes uniformly (no shadows for ambient)
         if (l->type[0] == 'a') { // "ambientlight"
-            ambient_out->r += lc.r;
-            ambient_out->g += lc.g;
-            ambient_out->b += lc.b;
+            if (l->light_shader) {
+                // VM ambient light shader
+                RhShaderContext ctx_light;
+                memset(&ctx_light, 0, sizeof(ctx_light));
+                ctx_light.Ps = ctx->P;
+                ctx_light.N = ctx->N;
+                l->light_shader(&ctx_light, l->light_shader_params);
+                ambient_out->r += ctx_light.Cl_out.r;
+                ambient_out->g += ctx_light.Cl_out.g;
+                ambient_out->b += ctx_light.Cl_out.b;
+            } else {
+                ambient_out->r += lc.r;
+                ambient_out->g += lc.g;
+                ambient_out->b += lc.b;
+            }
             continue;
         }
 
         RhVec3 L;
-        float attenuation = 1.0f;
+        RhColor light_cl;
 
-        if (l->type[0] == 'd') { // "distantlight"
-            L = l->direction;
-        } else if (l->type[0] == 's') { // "spotlight"
-            L = rh_vec3_normalize(rh_vec3_sub(l->position, ctx->P));
+        if (l->light_shader) {
+            // Execute VM light shader (light params are in camera space)
+            RhShaderContext ctx_light;
+            memset(&ctx_light, 0, sizeof(ctx_light));
+            ctx_light.Ps = ctx->P;
+            ctx_light.N = ctx->N;
+            ctx_light.P_world = ctx->P_world;
+            l->light_shader(&ctx_light, l->light_shader_params);
 
-            // Spotlight cone attenuation
-            // l->direction points from target toward light; L points from surface toward light
-            // Beam direction (light toward target) = -l->direction; light toward surface = -L
-            // cos_angle = dot(-l->direction, -L) = dot(l->direction, L)
-            float cos_angle = rh_vec3_dot(l->direction, L);
-            float angle = acosf(rh_max(-1.0f, rh_min(1.0f, cos_angle))) * (180.0f / RH_PI);
+            // Check if light contributes (L == 0 means outside cone or ambient)
+            float Llen2 = ctx_light.L_out.x * ctx_light.L_out.x
+                        + ctx_light.L_out.y * ctx_light.L_out.y
+                        + ctx_light.L_out.z * ctx_light.L_out.z;
+            if (Llen2 < 1e-24f) continue;
 
-            float inner_angle = l->coneangle;
-            float outer_angle = l->coneangle + l->conedeltaangle;
+            // L from VM shader is surface-to-light (Ps - from), normalize it
+            float inv_len = 1.0f / sqrtf(Llen2);
+            L.x = ctx_light.L_out.x * inv_len;
+            L.y = ctx_light.L_out.y * inv_len;
+            L.z = ctx_light.L_out.z * inv_len;
+            light_cl.r = ctx_light.Cl_out.r;
+            light_cl.g = ctx_light.Cl_out.g;
+            light_cl.b = ctx_light.Cl_out.b;
+        } else {
+            float attenuation = 1.0f;
 
-            if (angle > outer_angle) {
-                attenuation = 0.0f;
-            } else if (angle > inner_angle) {
-                // Smooth falloff in penumbra
-                float t = (angle - inner_angle) / (outer_angle - inner_angle);
-                attenuation = 1.0f - t;
-                attenuation *= attenuation; // Quadratic falloff
+            if (l->type[0] == 'd') { // "distantlight"
+                L = l->direction;
+            } else if (l->type[0] == 's') { // "spotlight"
+                L = rh_vec3_normalize(rh_vec3_sub(l->position, ctx->P));
+
+                // Spotlight cone attenuation
+                float cos_angle = rh_vec3_dot(l->direction, L);
+                float angle = acosf(rh_max(-1.0f, rh_min(1.0f, cos_angle))) * (180.0f / RH_PI);
+
+                float inner_angle = l->coneangle;
+                float outer_angle = l->coneangle + l->conedeltaangle;
+
+                if (angle > outer_angle) {
+                    attenuation = 0.0f;
+                } else if (angle > inner_angle) {
+                    float t = (angle - inner_angle) / (outer_angle - inner_angle);
+                    attenuation = 1.0f - t;
+                    attenuation *= attenuation;
+                }
+
+                if (attenuation > 0.0f && l->beamdistribution > 0.0f) {
+                    attenuation *= powf(rh_max(0.0f, cos_angle), l->beamdistribution);
+                }
+            } else { // "pointlight" or other
+                L = rh_vec3_normalize(rh_vec3_sub(l->position, ctx->P));
             }
 
-            // Beam distribution (cosine power)
-            if (attenuation > 0.0f && l->beamdistribution > 0.0f) {
-                attenuation *= powf(rh_max(0.0f, cos_angle), l->beamdistribution);
+            // Shadow map lookup (if light has shadow map)
+            float shadow_factor = 0.0f;
+            if (l->shadowmap && attenuation > 0.0f) {
+                if (rh_shadow_in_frustum(l->shadowmap, ctx->P_world)) {
+                    shadow_factor = rh_shadow_pcf_lookup(
+                        l->shadowmap,
+                        ctx->P_world,
+                        l->shadow_samples,
+                        l->shadow_bias,
+                        l->shadow_blur
+                    );
+                }
             }
-        } else { // "pointlight" or other
-            L = rh_vec3_normalize(rh_vec3_sub(l->position, ctx->P));
+
+            float light_visibility = 1.0f - shadow_factor;
+            attenuation *= light_visibility;
+
+            if (attenuation <= 0.0f) continue;
+
+            light_cl.r = lc.r * attenuation;
+            light_cl.g = lc.g * attenuation;
+            light_cl.b = lc.b * attenuation;
         }
-
-        // Shadow map lookup (if light has shadow map)
-        float shadow_factor = 0.0f;
-        if (l->shadowmap && attenuation > 0.0f) {
-            // Check if point is in shadow map frustum
-            if (rh_shadow_in_frustum(l->shadowmap, ctx->P_world)) {
-                shadow_factor = rh_shadow_pcf_lookup(
-                    l->shadowmap,
-                    ctx->P_world,
-                    l->shadow_samples,
-                    l->shadow_bias,
-                    l->shadow_blur
-                );
-            } else {
-                // Outside shadow map frustum - assume fully lit
-                shadow_factor = 0.0f;
-            }
-        }
-
-        // Apply shadow attenuation (1.0 = fully shadowed, 0.0 = fully lit)
-        float light_visibility = 1.0f - shadow_factor;
-        attenuation *= light_visibility;
 
         float n_dot_l = rh_vec3_dot(Nn, L);
 
-        if (n_dot_l > 0.0f && attenuation > 0.0f) {
-            float contrib = n_dot_l * attenuation;
-
+        if (n_dot_l > 0.0f) {
             // Diffuse
-            diff->r += lc.r * contrib;
-            diff->g += lc.g * contrib;
-            diff->b += lc.b * contrib;
+            diff->r += light_cl.r * n_dot_l;
+            diff->g += light_cl.g * n_dot_l;
+            diff->b += light_cl.b * n_dot_l;
 
             // Specular (Phong)
             if (roughness > 0.0f) {
@@ -157,10 +190,10 @@ static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor
                 float r_dot_v = rh_vec3_dot(R, V);
                 if (r_dot_v > 0.0f) {
                     float spec_power = 1.0f / roughness;
-                    float s = powf(r_dot_v, spec_power) * attenuation;
-                    spec->r += lc.r * s;
-                    spec->g += lc.g * s;
-                    spec->b += lc.b * s;
+                    float s = powf(r_dot_v, spec_power);
+                    spec->r += light_cl.r * s;
+                    spec->g += light_cl.g * s;
+                    spec->b += light_cl.b * s;
                 }
             }
         }

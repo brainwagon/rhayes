@@ -7,6 +7,10 @@
 #include "ri_internal.h"
 #include "rh_sl_vm.h"
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
     RiContextData* ctx = ri_get_ctx();
     if (!ctx || ctx->num_lights >= MAX_LIGHTS) return RI_NULL;
@@ -116,6 +120,7 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
                         strcmp(name, "pointlight") == 0 ||
                         strcmp(name, "distantlight") == 0 ||
                         strcmp(name, "spotlight") == 0) {
+                        fprintf(stderr, "shader: loaded builtin light '%s'\n", name);
                         found = true;
                     }
                 } else {
@@ -145,9 +150,9 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
                             rh_sl_shader_set_param(shader, "from", from_arr, 3);
                             float to_arr[3] = {to_world.x, to_world.y, to_world.z};
                             rh_sl_shader_set_param(shader, "to", to_arr, 3);
-                            fval = l->coneangle;
+                            fval = l->coneangle * (float)(M_PI / 180.0);
                             rh_sl_shader_set_param(shader, "coneangle", &fval, 1);
-                            fval = l->conedeltaangle;
+                            fval = l->conedeltaangle * (float)(M_PI / 180.0);
                             rh_sl_shader_set_param(shader, "conedeltaangle", &fval, 1);
                             fval = l->beamdistribution;
                             rh_sl_shader_set_param(shader, "beamdistribution", &fval, 1);

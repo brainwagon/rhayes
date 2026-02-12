@@ -133,8 +133,19 @@ void RiBegin(RtToken name) {
     g_ctx->near_clip = 0.1f;
     g_ctx->far_clip = 1e30f;
 
-    // Default shader search path: C built-ins first, then current dir, then shaders/
-    strcpy(g_ctx->shader_searchpath, "BUILTIN:.:shaders");
+    // Shader search path: use RHAYES_SHADER_PATH env var if set, else default
+    {
+        const char* env_path = getenv("RHAYES_SHADER_PATH");
+        if (env_path && env_path[0]) {
+            size_t len = strlen(env_path);
+            if (len >= sizeof(g_ctx->shader_searchpath))
+                len = sizeof(g_ctx->shader_searchpath) - 1;
+            memcpy(g_ctx->shader_searchpath, env_path, len);
+            g_ctx->shader_searchpath[len] = '\0';
+        } else {
+            strcpy(g_ctx->shader_searchpath, "BUILTIN:.:shaders");
+        }
+    }
 
     (void)name;
 }

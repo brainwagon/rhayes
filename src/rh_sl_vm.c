@@ -283,6 +283,54 @@ static void builtin_ambient(const float* regs, RhSLExecState* state,
     }
 }
 
+/*
+ * Evaluate a single light (VM shader or C fallback).
+ * Returns 1 if the light contributes, 0 otherwise.
+ * L_out is normalized direction, Cl_out is light color.
+ */
+static int eval_light_any(const RhSLLight* light, float* regs,
+                          float* L_out, float* Cl_out,
+                          RhShaderContext* ctx) {
+    if (light->light_shader != NULL) {
+        /* Execute VM light shader */
+        RhShaderContext ctx_light;
+        memset(&ctx_light, 0, sizeof(ctx_light));
+        /* Use camera-space P since light params (from/to) are in camera space */
+        ctx_light.Ps.x = regs[R_P+0];
+        ctx_light.Ps.y = regs[R_P+1];
+        ctx_light.Ps.z = regs[R_P+2];
+        ctx_light.N.x = regs[R_N+0];
+        ctx_light.N.y = regs[R_N+1];
+        ctx_light.N.z = regs[R_N+2];
+        if (ctx)
+            ctx_light.P_world = ctx->P_world;
+        ctx_light.light_list = NULL;
+        ctx_light.num_lights = 0;
+
+        light->light_shader(&ctx_light, light->light_shader_params);
+
+        float Lx = ctx_light.L_out.x;
+        float Ly = ctx_light.L_out.y;
+        float Lz = ctx_light.L_out.z;
+
+        /* Skip if L == 0 (ambient or outside cone) */
+        float Llen2 = Lx*Lx + Ly*Ly + Lz*Lz;
+        if (Llen2 < 1e-24f) return 0;
+
+        /* Normalize L */
+        float inv_len = 1.0f / sqrtf(Llen2);
+        L_out[0] = Lx * inv_len;
+        L_out[1] = Ly * inv_len;
+        L_out[2] = Lz * inv_len;
+        Cl_out[0] = ctx_light.Cl_out.r;
+        Cl_out[1] = ctx_light.Cl_out.g;
+        Cl_out[2] = ctx_light.Cl_out.b;
+        return 1;
+    }
+
+    return evaluate_light(light, regs, L_out, Cl_out, ctx);
+}
+
 static void builtin_diffuse(float* regs, RhSLExecState* state,
                             uint16_t nf_reg, float* out) {
     out[0] = out[1] = out[2] = 0.0f;
@@ -295,7 +343,7 @@ static void builtin_diffuse(float* regs, RhSLExecState* state,
     RhSLLight* lights = (RhSLLight*)state->light_list;
     for (int i = 0; i < state->num_lights; i++) {
         float L[3], Cl[3];
-        if (!evaluate_light(&lights[i], regs, L, Cl, state->shader_ctx))
+        if (!eval_light_any(&lights[i], regs, L, Cl, state->shader_ctx))
             continue;
         float n_dot_l = Nf_x * L[0] + Nf_y * L[1] + Nf_z * L[2];
         if (n_dot_l > 0.0f) {
@@ -333,7 +381,7 @@ static void builtin_specular(float* regs, RhSLExecState* state,
     RhSLLight* lights = (RhSLLight*)state->light_list;
     for (int i = 0; i < state->num_lights; i++) {
         float L[3], Cl[3];
-        if (!evaluate_light(&lights[i], regs, L, Cl, state->shader_ctx))
+        if (!eval_light_any(&lights[i], regs, L, Cl, state->shader_ctx))
             continue;
         float n_dot_l = Nf_x * L[0] + Nf_y * L[1] + Nf_z * L[2];
         if (n_dot_l > 0.0f) {
@@ -368,59 +416,14 @@ static int rh_sl_vm_advance_light(RhSLExecState* state, float* r) {
     while (state->current_light < state->num_lights) {
         RhSLLight* light = &lights[state->current_light];
 
-        if (light->light_shader != NULL) {
-            /* Execute VM light shader */
-            RhShaderContext ctx_light;
-            memset(&ctx_light, 0, sizeof(ctx_light));
-            ctx_light.Ps.x = r[R_P+0];
-            ctx_light.Ps.y = r[R_P+1];
-            ctx_light.Ps.z = r[R_P+2];
-            ctx_light.N.x = r[R_N+0];
-            ctx_light.N.y = r[R_N+1];
-            ctx_light.N.z = r[R_N+2];
-            if (state->shader_ctx)
-                ctx_light.P_world = state->shader_ctx->P_world;
-            ctx_light.light_list = NULL;
-            ctx_light.num_lights = 0;
-
-            light->light_shader(&ctx_light, light->light_shader_params);
-
-            float Lx = ctx_light.L_out.x;
-            float Ly = ctx_light.L_out.y;
-            float Lz = ctx_light.L_out.z;
-            float Clr = ctx_light.Cl_out.r;
-            float Clg = ctx_light.Cl_out.g;
-            float Clb = ctx_light.Cl_out.b;
-
-            /* Skip ambient lights (L == 0) */
-            float Llen2 = Lx*Lx + Ly*Ly + Lz*Lz;
-            if (Llen2 < 1e-24f) {
-                state->current_light++;
-                continue;
-            }
-
-            /* Normalize L for hemisphere test */
-            float inv_len = 1.0f / sqrtf(Llen2);
-            float Ln_x = Lx * inv_len;
-            float Ln_y = Ly * inv_len;
-            float Ln_z = Lz * inv_len;
-
+        float L[3], Cl[3];
+        if (eval_light_any(light, r, L, Cl, state->shader_ctx)) {
             /* Hemisphere test: dot(L_normalized, N) > 0 */
-            float n_dot_l = r[R_N+0]*Ln_x + r[R_N+1]*Ln_y + r[R_N+2]*Ln_z;
+            float n_dot_l = r[R_N+0]*L[0] + r[R_N+1]*L[1] + r[R_N+2]*L[2];
             if (n_dot_l <= 0.0f) {
                 state->current_light++;
                 continue;
             }
-
-            r[R_L+0] = Ln_x; r[R_L+1] = Ln_y; r[R_L+2] = Ln_z;
-            r[R_CL+0] = Clr; r[R_CL+1] = Clg; r[R_CL+2] = Clb;
-            state->current_light++;
-            return 1;
-        }
-
-        /* C fallback path */
-        float L[3], Cl[3];
-        if (evaluate_light(light, r, L, Cl, state->shader_ctx)) {
             r[R_L+0] = L[0]; r[R_L+1] = L[1]; r[R_L+2] = L[2];
             r[R_CL+0] = Cl[0]; r[R_CL+1] = Cl[1]; r[R_CL+2] = Cl[2];
             state->current_light++;
