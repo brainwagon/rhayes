@@ -15,6 +15,9 @@ typedef struct {
     const char* name;
     RhLight* l;
     RhVec3 to_world;
+    RtToken* tokens;
+    RtPointer* values;
+    int count;
     bool found;
 } LightSearch;
 
@@ -34,21 +37,20 @@ static bool light_search_cb(bool is_builtin, const char* dir, void* user) {
         if (prog && prog->shader_type == RH_SL_SHADER_LIGHT) {
             RhSLShader* shader = rh_sl_shader_create(prog);
             if (shader) {
-                float fval;
-                fval = s->l->intensity;
-                rh_sl_shader_set_param(shader, "intensity", &fval, 1);
-                float lc[3] = {s->l->color.r, s->l->color.g, s->l->color.b};
-                rh_sl_shader_set_param(shader, "lightcolor", lc, 3);
+                /* Generic parameter loop (like ri_set_sl_surface) */
+                for (int i = 0; i < s->count; i++) {
+                    if (!s->tokens[i]) break;
+                    float* fval = (float*)s->values[i];
+                    if (rh_sl_shader_set_param(shader, s->tokens[i], fval, 16) == 0)
+                        continue;
+                    rh_sl_shader_set_string_param(shader, s->tokens[i],
+                                                  (const char*)s->values[i]);
+                }
+                /* Override from/to with camera-space-transformed values */
                 float from_arr[3] = {s->l->position.x, s->l->position.y, s->l->position.z};
                 rh_sl_shader_set_param(shader, "from", from_arr, 3);
                 float to_arr[3] = {s->to_world.x, s->to_world.y, s->to_world.z};
                 rh_sl_shader_set_param(shader, "to", to_arr, 3);
-                fval = s->l->coneangle * (float)(M_PI / 180.0);
-                rh_sl_shader_set_param(shader, "coneangle", &fval, 1);
-                fval = s->l->conedeltaangle * (float)(M_PI / 180.0);
-                rh_sl_shader_set_param(shader, "conedeltaangle", &fval, 1);
-                fval = s->l->beamdistribution;
-                rh_sl_shader_set_param(shader, "beamdistribution", &fval, 1);
 
                 s->l->light_shader = rh_sl_vm_shader_exec;
                 s->l->light_shader_params = shader;
@@ -74,9 +76,9 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
     l->color = (RhColor){1.0f, 1.0f, 1.0f};
     l->position = rh_vec3_create(0.0f, 0.0f, 0.0f); // "From"
     RhVec3 to = rh_vec3_create(0.0f, 0.0f, 1.0f);   // "To"
-    // Spotlight defaults
-    l->coneangle = 30.0f;
-    l->conedeltaangle = 5.0f;
+    // Spotlight defaults (radians)
+    l->coneangle = (float)(30.0 * M_PI / 180.0);
+    l->conedeltaangle = (float)(5.0 * M_PI / 180.0);
     l->beamdistribution = 2.0f;
     // Shadow map defaults
     l->shadowmap = NULL;
@@ -151,7 +153,7 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
 
     // Search for light shader using the configured search path.
     {
-        LightSearch s = {name, l, to_world, false};
+        LightSearch s = {name, l, to_world, tokens, values, count, false};
         ri_iterate_searchpath(light_search_cb, &s);
     }
 

@@ -1,0 +1,19 @@
+##RenderMan RIB-Structure 1.1
+# Generate shadow map from spotlight position
+# Light at (0, 3, -3) looking at origin (45 degrees down)
+
+Format 512 512 1
+PixelSamples 1 1
+Display "tests/shadow/shadowspotlight.shd" "file" "z"
+Projection "perspective" "fov" 60
+
+Translate 0 3 -3
+Rotate 45 1 0 0
+
+WorldBegin
+  Surface "matte"
+  Color [0.8 0.8 0.8]
+  AttributeBegin Translate -1 0 0  Sphere 0.5 -0.5 0.5 360 AttributeEnd
+  AttributeBegin                   Sphere 0.5 -0.5 0.5 360 AttributeEnd
+  AttributeBegin Translate 1 0 0   Sphere 0.5 -0.5 0.5 360 AttributeEnd
+WorldEnd

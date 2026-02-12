@@ -119,6 +119,7 @@ static const BuiltinGlobal builtin_globals[] = {
 
     /* Light shader globals */
     {"Ps",   SL_TYPE_POINT,  0, BMASK_LIGHT},
+    {"Pw",   SL_TYPE_POINT,  0, BMASK_LIGHT},
     {"N",    SL_TYPE_NORMAL, 0, BMASK_LIGHT},
     {"L",    SL_TYPE_VECTOR, 1, BMASK_LIGHT},
     {"Cl",   SL_TYPE_COLOR,  1, BMASK_LIGHT},

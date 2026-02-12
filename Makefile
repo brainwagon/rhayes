@@ -118,12 +118,25 @@ test: $(RENDER) $(CATRIB)
 # Generate reference images (run once when tests are known-good)
 generate-refs: $(RENDER)
 	@echo "Generating reference images..."
-	@for rib in $$(find $(TEST_DIR)/rib -name "*.rib"); do \
+	@mkdir -p $(TEST_DIR)/output/shadow
+	@for shadow_rib in $$(find $(TEST_DIR)/rib/shadow -name "*_map.rib" 2>/dev/null); do \
+		name=$$(basename "$$shadow_rib" _map.rib); \
+		shd="$(TEST_DIR)/output/shadow/$${name}.shd"; \
+		temp="/tmp/temp_$${name}_map.rib"; \
+		sed "s|Display.*|Display \"$$shd\" \"file\" \"z\"|" "$$shadow_rib" > "$$temp"; \
+		$(RENDER) "$$temp" 2>/dev/null || true; \
+		rm -f "$$temp"; \
+	done
+	@for rib in $$(find $(TEST_DIR)/rib -name "*.rib" | sort); do \
+		name=$$(basename "$$rib" .rib); \
+		case "$$name" in *_map) continue ;; esac; \
 		rel=$${rib#$(TEST_DIR)/rib/}; \
 		ref="$(TEST_DIR)/reference/$${rel%.rib}.png"; \
 		mkdir -p "$$(dirname "$$ref")"; \
-		temp="/tmp/temp_$$(basename $$rib)"; \
-		sed "s|Display.*|Display \"$$ref\" \"file\" \"rgba\"|" "$$rib" > "$$temp"; \
+		temp="/tmp/temp_$$name.rib"; \
+		sed -e "s|Display.*|Display \"$$ref\" \"file\" \"rgba\"|" \
+		    -e "s|tests/shadow/\([^\"]*\.shd\)|$(TEST_DIR)/output/shadow/\1|g" \
+		    "$$rib" > "$$temp"; \
 		$(RENDER) "$$temp" 2>/dev/null || true; \
 		rm -f "$$temp"; \
 	done

@@ -1,0 +1,28 @@
+##RenderMan RIB-Structure 1.1
+# Render scene with shadowspotlight shader (SL-based shadow lookup)
+
+Format 200 200 1
+Display "shadowspotlight.png" "file" "rgba"
+Projection "perspective" "fov" 45
+
+Rotate 20 1 0 0
+Translate 0 0 -4
+
+WorldBegin
+  LightSource "shadowspotlight" "intensity" 20
+              "from" [0 3 -3] "to" [0 0 0]
+              "coneangle" 0.6981 "conedeltaangle" 0.08727
+              "shadowname" "tests/shadow/shadowspotlight.shd"
+  LightSource "ambientlight" "intensity" 0.1
+
+  Surface "plastic"
+  # Ground plane
+  AttributeBegin
+    Color [1.0 0.25 0.1]
+    Polygon "P" [-2 -0.5 -1.5  -2 -0.5 1.5  2 -0.5 1.5  2 -0.5 -1.5]
+  AttributeEnd
+  # 3 spheres
+  AttributeBegin Color [0.8 0.8 0.8] Translate -1 0 0 Sphere 0.5 -0.5 0.5 360 AttributeEnd
+  AttributeBegin Color [0.8 0.8 0.8]                   Sphere 0.5 -0.5 0.5 360 AttributeEnd
+  AttributeBegin Color [0.8 0.8 0.8] Translate 1 0 0   Sphere 0.5 -0.5 0.5 360 AttributeEnd
+WorldEnd

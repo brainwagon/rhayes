@@ -15,7 +15,7 @@ WorldBegin
 
 # Spotlight from above-right with shadow map
 # Match the shadow map camera position
-LightSource "spotlight" "from" [4 12 -4] "to" [0 0 0] "intensity" 1 "coneangle" 60 "conedeltaangle" 5 "shadowmap" "tests/shadow/checker_shadow.shd" "shadowsamples" 16 "shadowbias" 0.05 "shadowblur" 5.0
+LightSource "spotlight" "from" [4 12 -4] "to" [0 0 0] "intensity" 1 "coneangle" 1.0472 "conedeltaangle" 0.08727 "shadowmap" "tests/shadow/checker_shadow.shd" "shadowsamples" 16 "shadowbias" 0.05 "shadowblur" 5.0
 
 # Small amount of ambient light
 LightSource "ambientlight" "intensity" 0.15

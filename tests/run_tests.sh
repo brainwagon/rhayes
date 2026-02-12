@@ -40,16 +40,16 @@ run_parse_test() {
 
 run_shadow_map_generation() {
     # Generate shadow maps before running shadow render tests
-    local shadow_map_rib="$RIB_DIR/shadow/checker_shadow_map.rib"
-    local shadow_map_out="$OUT_DIR/shadow/checker_shadow.shd"
-
-    if [ -f "$shadow_map_rib" ]; then
+    for shadow_map_rib in "$RIB_DIR"/shadow/*_map.rib; do
+        [ -f "$shadow_map_rib" ] || continue
+        local name="$(basename "$shadow_map_rib" _map.rib)"
+        local shadow_map_out="$OUT_DIR/shadow/${name}.shd"
         mkdir -p "$(dirname "$shadow_map_out")"
-        local temp_rib="$OUT_DIR/temp_shadow_map.rib"
+        local temp_rib="$OUT_DIR/temp_${name}_map.rib"
         sed "s|Display.*|Display \"$shadow_map_out\" \"file\" \"z\"|" "$shadow_map_rib" > "$temp_rib"
         "$RENDER" "$temp_rib" 2>/dev/null
         rm -f "$temp_rib"
-    fi
+    done
 }
 
 run_render_test() {
@@ -68,9 +68,9 @@ run_render_test() {
 
     # Create temp RIB with output redirected
     local temp_rib="$OUT_DIR/temp_$name.rib"
-    # For shadow render tests, also update the shadow map path
+    # For shadow render tests, also update shadow map paths
     sed -e "s|Display.*|Display \"$out_file\" \"file\" \"rgba\"|" \
-        -e "s|tests/shadow/checker_shadow.shd|$OUT_DIR/shadow/checker_shadow.shd|g" \
+        -e "s|tests/shadow/\([^\"]*\.shd\)|$OUT_DIR/shadow/\1|g" \
         "$rib_file" > "$temp_rib"
 
     if ! "$RENDER" "$temp_rib" 2>/dev/null; then

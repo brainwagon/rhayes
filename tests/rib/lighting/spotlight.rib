@@ -8,7 +8,7 @@ TransformBegin
     Translate 0 0 -4
     WorldBegin
         # Spotlight aimed at center, showing cone falloff
-        LightSource "spotlight" "intensity" 2 "from" [1.5 2 2] "to" [0 0 0] "coneangle" 10 "conedeltaangle" 1
+        LightSource "spotlight" "intensity" 2 "from" [1.5 2 2] "to" [0 0 0] "coneangle" 0.1745 "conedeltaangle" 0.01745
         Surface "plastic"
         # Ground plane
         AttributeBegin

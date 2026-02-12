@@ -114,11 +114,12 @@ static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor
                         + ctx_light.L_out.z * ctx_light.L_out.z;
             if (Llen2 < 1e-24f) continue;
 
-            // L from VM shader is surface-to-light (Ps - from), normalize it
+            // L from illuminate block is light-to-surface (Ps - from).
+            // Negate to get surface-to-light for N.L calculations.
             float inv_len = 1.0f / sqrtf(Llen2);
-            L.x = ctx_light.L_out.x * inv_len;
-            L.y = ctx_light.L_out.y * inv_len;
-            L.z = ctx_light.L_out.z * inv_len;
+            L.x = -ctx_light.L_out.x * inv_len;
+            L.y = -ctx_light.L_out.y * inv_len;
+            L.z = -ctx_light.L_out.z * inv_len;
             light_cl.r = ctx_light.Cl_out.r;
             light_cl.g = ctx_light.Cl_out.g;
             light_cl.b = ctx_light.Cl_out.b;
@@ -128,11 +129,15 @@ static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor
             if (l->type[0] == 'd') { // "distantlight"
                 L = l->direction;
             } else if (l->type[0] == 's') { // "spotlight"
-                L = rh_vec3_normalize(rh_vec3_sub(l->position, ctx->P));
+                RhVec3 toLight = rh_vec3_sub(l->position, ctx->P);
+                float dist2 = rh_vec3_dot(toLight, toLight);
+                if (dist2 < 1e-12f) continue;
+                L = rh_vec3_mul(toLight, 1.0f / sqrtf(dist2));
+                attenuation /= dist2;
 
                 // Spotlight cone attenuation
                 float cos_angle = rh_vec3_dot(l->direction, L);
-                float angle = acosf(rh_max(-1.0f, rh_min(1.0f, cos_angle))) * (180.0f / RH_PI);
+                float angle = acosf(rh_max(-1.0f, rh_min(1.0f, cos_angle)));
 
                 float inner_angle = l->coneangle;
                 float outer_angle = l->coneangle + l->conedeltaangle;
@@ -149,7 +154,11 @@ static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor
                     attenuation *= powf(rh_max(0.0f, cos_angle), l->beamdistribution);
                 }
             } else { // "pointlight" or other
-                L = rh_vec3_normalize(rh_vec3_sub(l->position, ctx->P));
+                RhVec3 toLight = rh_vec3_sub(l->position, ctx->P);
+                float dist2 = rh_vec3_dot(toLight, toLight);
+                if (dist2 < 1e-12f) continue;
+                L = rh_vec3_mul(toLight, 1.0f / sqrtf(dist2));
+                attenuation /= dist2;
             }
 
             // Shadow map lookup (if light has shadow map)

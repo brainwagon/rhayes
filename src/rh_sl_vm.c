@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 
 /* ------------------------------------------------------------------ */
 /*  Light struct (must match RhLight in ri_internal.h exactly)         */
@@ -109,6 +110,8 @@ int rh_sl_shader_set_param(RhSLShader* shader, const char* name,
     for (int i = 0; i < prog->num_params; i++) {
         int nc = prog->params[i].num_components;
         if (strcmp(prog->params[i].name, name) == 0) {
+            if (prog->params[i].type == RH_SL_TYPE_STRING)
+                return -1; /* string params handled by set_string_param */
             int to_copy = (count < nc) ? count : nc;
             for (int c = 0; c < to_copy; c++)
                 shader->param_values[offset + c] = value[c];
@@ -204,15 +207,15 @@ static int evaluate_light(const RhSLLight* light, const float* regs,
             float clamped = cos_angle;
             if (clamped < -1.0f) clamped = -1.0f;
             if (clamped >  1.0f) clamped =  1.0f;
-            float angle_deg = acosf(clamped) * (180.0f / RH_PI);
+            float angle = acosf(clamped);
 
             float inner = light->coneangle;
             float outer = light->coneangle + light->conedeltaangle;
 
-            if (angle_deg > outer) {
+            if (angle > outer) {
                 attenuation = 0.0f;
-            } else if (angle_deg > inner) {
-                float t = (angle_deg - inner) / (outer - inner);
+            } else if (angle > inner) {
+                float t = (angle - inner) / (outer - inner);
                 attenuation = 1.0f - t;
                 attenuation *= attenuation;
             }
@@ -318,11 +321,12 @@ static int eval_light_any(const RhSLLight* light, float* regs,
         float Llen2 = Lx*Lx + Ly*Ly + Lz*Lz;
         if (Llen2 < 1e-24f) return 0;
 
-        /* Normalize L */
+        /* Negate and normalize L: illuminate gives light-to-surface,
+         * illuminance expects surface-to-light */
         float inv_len = 1.0f / sqrtf(Llen2);
-        L_out[0] = Lx * inv_len;
-        L_out[1] = Ly * inv_len;
-        L_out[2] = Lz * inv_len;
+        L_out[0] = -Lx * inv_len;
+        L_out[1] = -Ly * inv_len;
+        L_out[2] = -Lz * inv_len;
         Cl_out[0] = ctx_light.Cl_out.r;
         Cl_out[1] = ctx_light.Cl_out.g;
         Cl_out[2] = ctx_light.Cl_out.b;
@@ -451,6 +455,9 @@ static const char* get_string(RhSLShader* shader, const RhSLProgram* prog,
     return "";
 }
 
+/* Sentinel for "tried to load, got NULL" to avoid repeated load attempts */
+#define LOAD_FAILED_SENTINEL ((void*)(uintptr_t)1)
+
 static RhTexture* get_texture(RhSLExecState* state,
                               RhSLShader* shader,
                               const RhSLProgram* prog,
@@ -464,9 +471,11 @@ static RhTexture* get_texture(RhSLExecState* state,
     }
     if (str_idx < 0 || str_idx >= shader->num_textures) return NULL;
 
-    /* Return cached texture if already loaded */
-    if (shader->textures[str_idx])
+    /* Return cached result (either loaded texture or failed sentinel) */
+    if (shader->textures[str_idx]) {
+        if (shader->textures[str_idx] == LOAD_FAILED_SENTINEL) return NULL;
         return (RhTexture*)shader->textures[str_idx];
+    }
 
     /* Load on first use (using search-path-aware callback if available) */
     RhTexture* tex = NULL;
@@ -475,7 +484,7 @@ static RhTexture* get_texture(RhSLExecState* state,
     } else {
         tex = rh_texture_load(name, RH_TEX_RGB);
     }
-    shader->textures[str_idx] = tex;
+    shader->textures[str_idx] = tex ? tex : LOAD_FAILED_SENTINEL;
     return tex;
 }
 
@@ -492,8 +501,10 @@ static RhShadowMap* get_shadowmap(RhSLExecState* state,
     }
     if (str_idx < 0 || str_idx >= shader->num_textures) return NULL;
 
-    if (shader->textures[str_idx])
+    if (shader->textures[str_idx]) {
+        if (shader->textures[str_idx] == LOAD_FAILED_SENTINEL) return NULL;
         return (RhShadowMap*)shader->textures[str_idx];
+    }
 
     RhShadowMap* sm = NULL;
     if (state->shadow_read_cb) {
@@ -501,7 +512,7 @@ static RhShadowMap* get_shadowmap(RhSLExecState* state,
     } else {
         sm = rh_shadowmap_read(name);
     }
-    shader->textures[str_idx] = sm;
+    shader->textures[str_idx] = sm ? sm : LOAD_FAILED_SENTINEL;
     return sm;
 }
 
@@ -768,7 +779,7 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
             RhShadowMap* sm = get_shadowmap(state, sh, program, src2, sname);
             if (sm) {
                 RhVec3 pw = {r[src1], r[src1+1], r[src1+2]};
-                r[dst] = rh_shadow_pcf_lookup(sm, pw, 16, 0.01f, 1.0f);
+                r[dst] = rh_shadow_pcf_lookup(sm, pw, 16, 0.05f, 1.0f);
             } else {
                 r[dst] = 0.0f;
             }
