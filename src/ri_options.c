@@ -78,6 +78,15 @@ void RiOptionV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
                     memcpy(ctx->shader_searchpath, path, len);
                     ctx->shader_searchpath[len] = '\0';
                 }
+            } else if (strcmp(tokens[i], "texture") == 0) {
+                const char* path = (const char*)values[i];
+                if (path) {
+                    size_t len = strlen(path);
+                    if (len >= sizeof(ctx->texture_searchpath))
+                        len = sizeof(ctx->texture_searchpath) - 1;
+                    memcpy(ctx->texture_searchpath, path, len);
+                    ctx->texture_searchpath[len] = '\0';
+                }
             }
         }
     } else if (strcmp(name, "limits") == 0) {

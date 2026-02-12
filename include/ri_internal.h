@@ -310,6 +310,7 @@ typedef struct {
 
     // Shader search path
     char shader_searchpath[512];
+    char texture_searchpath[512];
 } RiOptionsState;
 
 // --- Context Data ---
@@ -469,6 +470,7 @@ typedef struct {
 
     // Shader search path (colon-separated, with BUILTIN token)
     char shader_searchpath[512];
+    char texture_searchpath[512];
 
     // Frame state (RiFrameBegin/End)
     bool frame_active;
@@ -513,6 +515,9 @@ void ri_add_geometry(RhPrimitive* p);
 #include "rh_sl_vm.h"
 RhSLProgram* sl_load_program(const char* name);
 void ri_sl_cache_clear(void);
+
+RhTexture* ri_texture_load(const char* filename, RhTextureFormat format);
+RhShadowMap* ri_shadowmap_read(const char* filename);
 
 /* Try to load a shader from a single directory prefix.
    Returns cached or newly loaded program, or NULL. */

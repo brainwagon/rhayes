@@ -262,6 +262,96 @@ void ri_iterate_searchpath(RiSearchPathCallback cb, void* user) {
     }
 }
 
+void ri_iterate_texture_searchpath(RiSearchPathCallback cb, void* user) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+
+    const char* path = ctx->texture_searchpath;
+    char dir_buf[256];
+
+    while (*path) {
+        const char* end = path;
+        while (*end && *end != ':') end++;
+        size_t len = (size_t)(end - path);
+
+        if (len > 0) {
+            /* Convert "." to "", otherwise append '/' */
+            if (len == 1 && path[0] == '.') {
+                dir_buf[0] = '\0';
+            } else {
+                if (len >= 255) len = 254;
+                memcpy(dir_buf, path, len);
+                if (dir_buf[len - 1] != '/') {
+                    dir_buf[len] = '/';
+                    dir_buf[len + 1] = '\0';
+                } else {
+                    dir_buf[len] = '\0';
+                }
+            }
+            if (cb(false, dir_buf, user)) return;
+        }
+
+        path = (*end == ':') ? end + 1 : end;
+    }
+}
+
+typedef struct {
+    const char* filename;
+    RhTextureFormat format;
+    RhTexture* result;
+} TextureSearch;
+
+static bool texture_search_cb(bool is_builtin, const char* dir, void* user) {
+    (void)is_builtin;
+    TextureSearch* s = (TextureSearch*)user;
+    char path[512];
+    if (dir && dir[0]) {
+        snprintf(path, sizeof(path), "%s%s", dir, s->filename);
+    } else {
+        strncpy(path, s->filename, sizeof(path) - 1);
+        path[sizeof(path) - 1] = '\0';
+    }
+    
+    s->result = rh_texture_load(path, s->format);
+    return (s->result != NULL);
+}
+
+RhTexture* ri_texture_load(const char* filename, RhTextureFormat format) {
+    if (!filename || !filename[0]) return NULL;
+    
+    TextureSearch s = {filename, format, NULL};
+    ri_iterate_texture_searchpath(texture_search_cb, &s);
+    return s.result;
+}
+
+typedef struct {
+    const char* filename;
+    RhShadowMap* result;
+} ShadowSearch;
+
+static bool shadow_search_cb(bool is_builtin, const char* dir, void* user) {
+    (void)is_builtin;
+    ShadowSearch* s = (ShadowSearch*)user;
+    char path[512];
+    if (dir && dir[0]) {
+        snprintf(path, sizeof(path), "%s%s", dir, s->filename);
+    } else {
+        strncpy(path, s->filename, sizeof(path) - 1);
+        path[sizeof(path) - 1] = '\0';
+    }
+    
+    s->result = rh_shadowmap_read(path);
+    return (s->result != NULL);
+}
+
+RhShadowMap* ri_shadowmap_read(const char* filename) {
+    if (!filename || !filename[0]) return NULL;
+    
+    ShadowSearch s = {filename, NULL};
+    ri_iterate_texture_searchpath(shadow_search_cb, &s);
+    return s.result;
+}
+
 // --- Standard Basis Matrices ---
 
 RtMatrix RiBezierBasis = {
@@ -1036,7 +1126,7 @@ static bool ri_set_builtin_surface(RtToken name, RhShaderFunc func,
                             tlen = sizeof(params->texturename) - 1;
                         memcpy(params->texturename, texname, tlen);
                         params->texturename[tlen] = '\0';
-                        params->texture = rh_texture_load(texname, RH_TEX_RGB);
+                        params->texture = ri_texture_load(texname, RH_TEX_RGB);
                         if (!params->texture) {
                             fprintf(stderr, "Warning: Failed to load texture '%s'\n", texname);
                         }

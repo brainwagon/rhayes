@@ -3,6 +3,8 @@
 
 #include "rh_sl_opcodes.h"
 #include "rh_shader.h"
+#include "rh_texture.h"
+#include "rh_shadow.h"
 
 /*
  * Shading Language Virtual Machine
@@ -85,6 +87,10 @@ typedef struct {
 
     /* Back-reference to shader instance (for texture caching) */
     void* shader;
+
+    /* Search-path-aware loading callbacks (populated by libri) */
+    RhTexture*   (*texture_load_cb)(const char* filename, RhTextureFormat format);
+    RhShadowMap* (*shadow_read_cb)(const char* filename);
 } RhSLExecState;
 
 /* --- API --- */

@@ -11,6 +11,55 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+typedef struct {
+    const char* name;
+    RhLight* l;
+    RhVec3 to_world;
+    bool found;
+} LightSearch;
+
+static bool light_search_cb(bool is_builtin, const char* dir, void* user) {
+    LightSearch* s = (LightSearch*)user;
+    if (is_builtin) {
+        if (strcmp(s->name, "ambientlight") == 0 ||
+            strcmp(s->name, "pointlight") == 0 ||
+            strcmp(s->name, "distantlight") == 0 ||
+            strcmp(s->name, "spotlight") == 0) {
+            fprintf(stderr, "shader: loaded builtin light '%s'\n", s->name);
+            s->found = true;
+            return true;
+        }
+    } else {
+        RhSLProgram* prog = sl_try_load_from_dir(s->name, dir);
+        if (prog && prog->shader_type == RH_SL_SHADER_LIGHT) {
+            RhSLShader* shader = rh_sl_shader_create(prog);
+            if (shader) {
+                float fval;
+                fval = s->l->intensity;
+                rh_sl_shader_set_param(shader, "intensity", &fval, 1);
+                float lc[3] = {s->l->color.r, s->l->color.g, s->l->color.b};
+                rh_sl_shader_set_param(shader, "lightcolor", lc, 3);
+                float from_arr[3] = {s->l->position.x, s->l->position.y, s->l->position.z};
+                rh_sl_shader_set_param(shader, "from", from_arr, 3);
+                float to_arr[3] = {s->to_world.x, s->to_world.y, s->to_world.z};
+                rh_sl_shader_set_param(shader, "to", to_arr, 3);
+                fval = s->l->coneangle * (float)(M_PI / 180.0);
+                rh_sl_shader_set_param(shader, "coneangle", &fval, 1);
+                fval = s->l->conedeltaangle * (float)(M_PI / 180.0);
+                rh_sl_shader_set_param(shader, "conedeltaangle", &fval, 1);
+                fval = s->l->beamdistribution;
+                rh_sl_shader_set_param(shader, "beamdistribution", &fval, 1);
+
+                s->l->light_shader = rh_sl_vm_shader_exec;
+                s->l->light_shader_params = shader;
+                s->found = true;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
     RiContextData* ctx = ri_get_ctx();
     if (!ctx || ctx->num_lights >= MAX_LIGHTS) return RI_NULL;
@@ -85,7 +134,7 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
 
     // Load shadow map if specified
     if (shadowmap_file) {
-        l->shadowmap = rh_shadowmap_read(shadowmap_file);
+        l->shadowmap = ri_shadowmap_read(shadowmap_file);
         if (!l->shadowmap) {
             fprintf(stderr, "Warning: Failed to load shadow map '%s' for light\n", shadowmap_file);
         }
@@ -101,72 +150,9 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
     l->direction = rh_vec3_normalize(rh_vec3_sub(l->position, to_world));
 
     // Search for light shader using the configured search path.
-    // BUILTIN = use C evaluate_light() (light_shader stays NULL).
-    // Directory elements = try loading .slo/.sl VM shader.
     {
-        const char* spath = ctx->shader_searchpath;
-        char dir_buf[256];
-        bool found = false;
-
-        while (*spath && !found) {
-            const char* end = spath;
-            while (*end && *end != ':') end++;
-            size_t slen = (size_t)(end - spath);
-
-            if (slen > 0) {
-                if (slen == 7 && memcmp(spath, "BUILTIN", 7) == 0) {
-                    /* BUILTIN: recognized light types use C fallback */
-                    if (strcmp(name, "ambientlight") == 0 ||
-                        strcmp(name, "pointlight") == 0 ||
-                        strcmp(name, "distantlight") == 0 ||
-                        strcmp(name, "spotlight") == 0) {
-                        fprintf(stderr, "shader: loaded builtin light '%s'\n", name);
-                        found = true;
-                    }
-                } else {
-                    /* Directory element: try .slo/.sl */
-                    if (slen == 1 && spath[0] == '.') {
-                        dir_buf[0] = '\0';
-                    } else {
-                        if (slen >= 255) slen = 254;
-                        memcpy(dir_buf, spath, slen);
-                        if (dir_buf[slen - 1] != '/') {
-                            dir_buf[slen] = '/';
-                            dir_buf[slen + 1] = '\0';
-                        } else {
-                            dir_buf[slen] = '\0';
-                        }
-                    }
-                    RhSLProgram* prog = sl_try_load_from_dir(name, dir_buf);
-                    if (prog && prog->shader_type == RH_SL_SHADER_LIGHT) {
-                        RhSLShader* shader = rh_sl_shader_create(prog);
-                        if (shader) {
-                            float fval;
-                            fval = l->intensity;
-                            rh_sl_shader_set_param(shader, "intensity", &fval, 1);
-                            float lc[3] = {l->color.r, l->color.g, l->color.b};
-                            rh_sl_shader_set_param(shader, "lightcolor", lc, 3);
-                            float from_arr[3] = {l->position.x, l->position.y, l->position.z};
-                            rh_sl_shader_set_param(shader, "from", from_arr, 3);
-                            float to_arr[3] = {to_world.x, to_world.y, to_world.z};
-                            rh_sl_shader_set_param(shader, "to", to_arr, 3);
-                            fval = l->coneangle * (float)(M_PI / 180.0);
-                            rh_sl_shader_set_param(shader, "coneangle", &fval, 1);
-                            fval = l->conedeltaangle * (float)(M_PI / 180.0);
-                            rh_sl_shader_set_param(shader, "conedeltaangle", &fval, 1);
-                            fval = l->beamdistribution;
-                            rh_sl_shader_set_param(shader, "beamdistribution", &fval, 1);
-
-                            l->light_shader = rh_sl_vm_shader_exec;
-                            l->light_shader_params = shader;
-                            found = true;
-                        }
-                    }
-                }
-            }
-
-            spath = (*end == ':') ? end + 1 : end;
-        }
+        LightSearch s = {name, l, to_world, false};
+        ri_iterate_searchpath(light_search_cb, &s);
     }
 
     return RI_NULL;

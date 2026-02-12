@@ -1,3 +1,4 @@
+#include "ri_internal.h"
 #include "rh_sl_vm.h"
 #include "rh_shadow.h"
 #include "rh_noise.h"
@@ -450,7 +451,8 @@ static const char* get_string(RhSLShader* shader, const RhSLProgram* prog,
     return "";
 }
 
-static RhTexture* get_texture(RhSLShader* shader,
+static RhTexture* get_texture(RhSLExecState* state,
+                              RhSLShader* shader,
                               const RhSLProgram* prog,
                               int str_idx, const char* name) {
     if (!shader || !name || !name[0]) return NULL;
@@ -466,13 +468,19 @@ static RhTexture* get_texture(RhSLShader* shader,
     if (shader->textures[str_idx])
         return (RhTexture*)shader->textures[str_idx];
 
-    /* Load on first use */
-    RhTexture* tex = rh_texture_load(name, RH_TEX_RGB);
+    /* Load on first use (using search-path-aware callback if available) */
+    RhTexture* tex = NULL;
+    if (state->texture_load_cb) {
+        tex = state->texture_load_cb(name, RH_TEX_RGB);
+    } else {
+        tex = rh_texture_load(name, RH_TEX_RGB);
+    }
     shader->textures[str_idx] = tex;
     return tex;
 }
 
-static RhShadowMap* get_shadowmap(RhSLShader* shader,
+static RhShadowMap* get_shadowmap(RhSLExecState* state,
+                                  RhSLShader* shader,
                                   const RhSLProgram* prog,
                                   int str_idx, const char* name) {
     if (!shader || !name || !name[0]) return NULL;
@@ -487,7 +495,12 @@ static RhShadowMap* get_shadowmap(RhSLShader* shader,
     if (shader->textures[str_idx])
         return (RhShadowMap*)shader->textures[str_idx];
 
-    RhShadowMap* sm = rh_shadowmap_read(name);
+    RhShadowMap* sm = NULL;
+    if (state->shadow_read_cb) {
+        sm = state->shadow_read_cb(name);
+    } else {
+        sm = rh_shadowmap_read(name);
+    }
     shader->textures[str_idx] = sm;
     return sm;
 }
@@ -739,7 +752,7 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
         case OP_TEXTURE: {
             RhSLShader* sh = (RhSLShader*)state->shader;
             const char* tname = get_string(sh, program, src2);
-            RhTexture* tex = get_texture(sh, program, src2, tname);
+            RhTexture* tex = get_texture(state, sh, program, src2, tname);
             if (tex) {
                 RhColor c = rh_texture_sample(tex, r[src1], r[src1+1],
                                               r[R_DU], r[R_DV]);
@@ -752,7 +765,7 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
         case OP_SHADOW: {
             RhSLShader* sh = (RhSLShader*)state->shader;
             const char* sname = get_string(sh, program, src2);
-            RhShadowMap* sm = get_shadowmap(sh, program, src2, sname);
+            RhShadowMap* sm = get_shadowmap(state, sh, program, src2, sname);
             if (sm) {
                 RhVec3 pw = {r[src1], r[src1+1], r[src1+2]};
                 r[dst] = rh_shadow_pcf_lookup(sm, pw, 16, 0.01f, 1.0f);

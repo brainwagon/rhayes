@@ -147,6 +147,20 @@ void RiBegin(RtToken name) {
         }
     }
 
+    // Texture search path: use RHAYES_TEXTURE_PATH env var if set, else default
+    {
+        const char* env_path = getenv("RHAYES_TEXTURE_PATH");
+        if (env_path && env_path[0]) {
+            size_t len = strlen(env_path);
+            if (len >= sizeof(g_ctx->texture_searchpath))
+                len = sizeof(g_ctx->texture_searchpath) - 1;
+            memcpy(g_ctx->texture_searchpath, env_path, len);
+            g_ctx->texture_searchpath[len] = '\0';
+        } else {
+            strcpy(g_ctx->texture_searchpath, ".:./textures");
+        }
+    }
+
     (void)name;
 }
 
@@ -227,6 +241,7 @@ void RiFrameBegin(RtInt frame) {
     strcpy(g_ctx->saved_options.stats_options.jsonfilename, g_ctx->stats_options.jsonfilename);
     g_ctx->saved_options.show_progress = g_ctx->show_progress;
     strcpy(g_ctx->saved_options.shader_searchpath, g_ctx->shader_searchpath);
+    strcpy(g_ctx->saved_options.texture_searchpath, g_ctx->texture_searchpath);
 
     // Track resources for cleanup
     g_ctx->lights_at_frame_begin = g_ctx->num_lights;
@@ -258,6 +273,7 @@ void RiFrameEnd(void) {
     strcpy(g_ctx->stats_options.jsonfilename, g_ctx->saved_options.stats_options.jsonfilename);
     g_ctx->show_progress = g_ctx->saved_options.show_progress;
     strcpy(g_ctx->shader_searchpath, g_ctx->saved_options.shader_searchpath);
+    strcpy(g_ctx->texture_searchpath, g_ctx->saved_options.texture_searchpath);
 
     // Remove lights created in frame
     g_ctx->num_lights = g_ctx->lights_at_frame_begin;
