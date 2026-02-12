@@ -4,7 +4,7 @@ Format 200 200 1
 Display "ambientlight.png" "file" "rgba"
 Projection "perspective" "fov" 45
 TransformBegin
-    Rotate -20 1 0 0
+    Rotate 20 1 0 0
     Translate 0 0 -4
     WorldBegin
         # Ambient light provides uniform illumination with no direction
@@ -12,22 +12,26 @@ TransformBegin
         Surface "plastic"
         # Ground plane
         AttributeBegin
-            Color [0.5 0.5 0.5]
-            Surface "matte"
-            Polygon "P" [-2 -0.5 -1.5  2 -0.5 -1.5  2 -0.5 1.5  -2 -0.5 1.5]
+            Color [1.0 0.25 0.1]
+            Surface "plastic"
+            Polygon "P" [ -2 -0.5 -1.5
+                          -2 -0.5 1.5
+                           2 -0.5 1.5
+                           2 -0.5 -1.5
+                          ]
         AttributeEnd
-        # Multiple spheres showing uniform lighting (no shadows or directional shading)
+        # Row of spheres showing uniform ambient lighting
         AttributeBegin
-            Color [0.8 0.2 0.2]
+            Color [0.8 0.8 0.8]
             Translate -1 0 0
             Sphere 0.5 -0.5 0.5 360
         AttributeEnd
         AttributeBegin
-            Color [0.2 0.8 0.2]
+            Color [0.8 0.8 0.8]
             Sphere 0.5 -0.5 0.5 360
         AttributeEnd
         AttributeBegin
-            Color [0.2 0.2 0.8]
+            Color [0.8 0.8 0.8]
             Translate 1 0 0
             Sphere 0.5 -0.5 0.5 360
         AttributeEnd
