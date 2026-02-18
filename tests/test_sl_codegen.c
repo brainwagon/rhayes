@@ -1473,6 +1473,79 @@ static void test_plastic(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Test: marble shader (noise-based vein pattern)                     */
+/* ------------------------------------------------------------------ */
+
+static void test_marble(void) {
+    const char* src =
+        "surface marble(\n"
+        "    float Ka = 1; float Kd = 0.8; float Ks = 0.2;\n"
+        "    float roughness = 0.08;\n"
+        "    color specularcolor = color(1, 1, 1);\n"
+        "    color veincolor = color(0.1, 0.08, 0.06);\n"
+        "    float scale = 4; float veinfreq = 1.5;\n"
+        ") {\n"
+        "    normal Nf = faceforward(normalize(N), I);\n"
+        "    vector V = -normalize(I);\n"
+        "    float t = noise(scale * P);\n"
+        "    t += 0.5 * noise(2.0 * scale * P);\n"
+        "    t += 0.25 * noise(4.0 * scale * P);\n"
+        "    t += 0.125 * noise(8.0 * scale * P);\n"
+        "    t = t / 1.875;\n"
+        "    float stripe = sin(veinfreq * 3.14159265 * (xcomp(scale * P) + t));\n"
+        "    stripe = (stripe + 1.0) * 0.5;\n"
+        "    stripe = smoothstep(0.3, 0.7, stripe);\n"
+        "    color c = mix(Cs, veincolor, stripe);\n"
+        "    Oi = Os;\n"
+        "    Ci = Os * (c * (Ka * ambient() + Kd * diffuse(Nf)) +\n"
+        "               specularcolor * Ks * specular(Nf, V, roughness));\n"
+        "}";
+
+    RhLight light;
+    memset(&light, 0, sizeof(light));
+    sl_strcpy(light.type, sizeof(light.type), "distantlight");
+    light.direction = (RhVec3){0.0f, 0.0f, -1.0f};
+    light.color = (RhColor){1.0f, 1.0f, 1.0f};
+    light.intensity = 1.0f;
+
+    /* Test 1: marble shader compiles and produces nonzero output */
+    RhShaderContext ctx1;
+    init_ctx(&ctx1);
+    if (run_shader(src, &ctx1, &light, 1) != 0) {
+        tests_run++; tests_failed++;
+        printf("  FAIL [marble] compilation failed\n");
+        return;
+    }
+    tests_run++;
+    if (ctx1.Ci.r > 0.0f || ctx1.Ci.g > 0.0f || ctx1.Ci.b > 0.0f) {
+        tests_passed++;
+    } else {
+        tests_failed++;
+        printf("  FAIL [marble] expected nonzero Ci at default P\n");
+    }
+
+    /* Test 2: outputs differ at two different positions (noise varies).
+     * P.x shifts by 0.1 world units; with scale=4 that's 0.4 in noise-space,
+     * which is not a multiple of the vein period (2/(4*1.5) = 1/3), so
+     * the stripe value and thus Ci will differ. */
+    RhShaderContext ctx2;
+    init_ctx(&ctx2);
+    ctx2.P = (RhVec3){0.1f, 0.0f, 5.0f};
+    if (run_shader(src, &ctx2, &light, 1) != 0) {
+        tests_run++; tests_failed++;
+        printf("  FAIL [marble] run at second position failed\n");
+        return;
+    }
+    tests_run++;
+    if (ctx1.Ci.r != ctx2.Ci.r || ctx1.Ci.g != ctx2.Ci.g || ctx1.Ci.b != ctx2.Ci.b) {
+        tests_passed++;
+    } else {
+        tests_failed++;
+        printf("  FAIL [marble] expected different Ci at different P positions\n");
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Test: constant shader (simplest surface shader)                    */
 /* ------------------------------------------------------------------ */
 
@@ -2044,6 +2117,7 @@ int main(void) {
     /* Full shader tests */
     test_constant_shader();
     test_plastic();
+    test_marble();
     test_displacement_shader();
 
     /* Golden test */
