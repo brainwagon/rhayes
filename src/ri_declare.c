@@ -200,3 +200,35 @@ int ri_declaration_float_count(const RiDeclaration* decl) {
     if (!decl) return 0;
     return rh_type_component_count(decl->type) * decl->array_size;
 }
+
+/* Parse an inline token like "float sphere" or "uniform color Kd".
+ * Finds the last space: bare_name = last word, decl_string = prefix.
+ * Returns 1 if inline type found, 0 if plain bare name.
+ * Caller provides writable output buffers. */
+int ri_parse_inline_token(const char* token,
+                           char* bare_name_out, int bare_name_size,
+                           char* decl_string_out, int decl_size) {
+    if (!token || !bare_name_out || bare_name_size < 1) return 0;
+    const char* last_sp = NULL;
+    for (const char* p = token; *p; p++)
+        if (*p == ' ') last_sp = p;
+    if (!last_sp) {
+        /* Plain bare name */
+        int len = (int)strlen(token);
+        int cp = len < bare_name_size - 1 ? len : bare_name_size - 1;
+        memcpy(bare_name_out, token, cp); bare_name_out[cp] = '\0';
+        if (decl_string_out && decl_size > 0) decl_string_out[0] = '\0';
+        return 0;
+    }
+    /* Name = text after last space */
+    int nlen = (int)strlen(last_sp + 1);
+    int ncp = nlen < bare_name_size - 1 ? nlen : bare_name_size - 1;
+    memcpy(bare_name_out, last_sp + 1, ncp); bare_name_out[ncp] = '\0';
+    /* Decl = text before last space */
+    if (decl_string_out && decl_size > 0) {
+        int dlen = (int)(last_sp - token);
+        int dcp = dlen < decl_size - 1 ? dlen : decl_size - 1;
+        memcpy(decl_string_out, token, dcp); decl_string_out[dcp] = '\0';
+    }
+    return 1;
+}

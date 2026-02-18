@@ -504,6 +504,9 @@ RiAttributeState* ri_curr(void);
 const RiDeclaration* ri_lookup_declaration(const char* name);
 int ri_declaration_float_count(const RiDeclaration* decl);
 void ri_install_standard_declarations(void);
+int ri_parse_inline_token(const char* token,
+                           char* bare_name_out, int bare_name_size,
+                           char* decl_string_out, int decl_size);
 
 // --- Render Functions ---
 // Defined in ri_render.c

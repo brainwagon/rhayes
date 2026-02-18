@@ -3,6 +3,13 @@
 #include <string.h>
 #include <stdarg.h>
 
+#define RIBOUT_MAX_DECLS 128
+
+typedef struct {
+    char name[64];
+    char decl_str[128];  /* e.g. "float", "uniform color" */
+} RibOutDecl;
+
 // RIB Output Context
 typedef struct {
     FILE* output;
@@ -11,6 +18,8 @@ typedef struct {
     int owns_file;      // 1 if we opened the file, 0 if user provided stream
     int in_world;       // Track if we're inside WorldBegin/End
     int object_counter; // For generating object handles
+    RibOutDecl user_decls[RIBOUT_MAX_DECLS];
+    int num_user_decls;
 } RibOutputContext;
 
 static RibOutputContext* g_rib_ctx = NULL;
@@ -47,52 +56,96 @@ static void write_matrix(RtMatrix m) {
     fprintf(g_rib_ctx->output, "]");
 }
 
+// Builtin parameter table (name, float-components, is_string)
+typedef struct { const char* name; int components; int is_string; } RibOutBuiltin;
+static const RibOutBuiltin ribout_builtins[] = {
+    {"P", 3, 0}, {"Pz", 1, 0}, {"Pw", 4, 0},
+    {"N", 3, 0}, {"Np", 3, 0}, {"Cs", 3, 0}, {"Os", 3, 0},
+    {"s", 1, 0}, {"t", 1, 0}, {"st", 2, 0},
+    {"intensity", 1, 0}, {"lightcolor", 3, 0},
+    {"from", 3, 0}, {"to", 3, 0},
+    {"Ka", 1, 0}, {"Kd", 1, 0}, {"Ks", 1, 0},
+    {"roughness", 1, 0}, {"specularcolor", 3, 0},
+    {"texturename", 1, 1}, {"mapname", 1, 1}, {"filename", 1, 1},
+    {"coneangle", 1, 0}, {"conedeltaangle", 1, 0}, {"beamdistribution", 1, 0},
+    {"fov", 1, 0}, {"background", 3, 0},
+    {"mindistance", 1, 0}, {"maxdistance", 1, 0}, {"distance", 1, 0},
+    {NULL, 0, 0}
+};
+
+static const RibOutBuiltin* ribout_find_builtin(const char* name) {
+    for (int i = 0; ribout_builtins[i].name; i++)
+        if (strcmp(ribout_builtins[i].name, name) == 0)
+            return &ribout_builtins[i];
+    return NULL;
+}
+
+static const char* ribout_lookup_user_decl(const char* name) {
+    if (!g_rib_ctx) return NULL;
+    for (int i = 0; i < g_rib_ctx->num_user_decls; i++)
+        if (strcmp(g_rib_ctx->user_decls[i].name, name) == 0)
+            return g_rib_ctx->user_decls[i].decl_str;
+    return NULL;
+}
+
+/* Return the base type from a decl string (last space-separated word). */
+static const char* ribout_decl_type(const char* s) {
+    const char* last = s;
+    while (*s) {
+        while (*s == ' ') s++;
+        if (*s) { last = s; while (*s && *s != ' ') s++; }
+    }
+    return last;
+}
+
+static int ribout_decl_components(const char* decl_str) {
+    const char* t = ribout_decl_type(decl_str);
+    if (strncmp(t, "color",  5) == 0 || strncmp(t, "point",  5) == 0 ||
+        strncmp(t, "vector", 6) == 0 || strncmp(t, "normal", 6) == 0) return 3;
+    if (strncmp(t, "hpoint", 6) == 0) return 4;
+    if (strncmp(t, "matrix", 6) == 0) return 16;
+    return 1;
+}
+
+static int ribout_decl_is_string(const char* decl_str) {
+    return strncmp(ribout_decl_type(decl_str), "string", 6) == 0;
+}
+
 // Helper: Write parameter list (token-value pairs)
 static void write_params(RtToken* tokens, RtPointer* values, int count) {
     if (!g_rib_ctx || !g_rib_ctx->output || count <= 0) return;
-
     for (int i = 0; i < count; i++) {
         RtToken token = tokens[i];
         if (!token) break;
-
-        fprintf(g_rib_ctx->output, " \"%s\" ", token);
-
-        // Determine array size based on token type
-        // For now, handle common cases
-        if (strcmp(token, "P") == 0 || strcmp(token, "Pw") == 0) {
-            // Position array - need vertex count from context
-            // This is handled specially by specific primitives (Polygon, Patch)
-            // For generic params, we just note it's a point array
-            fprintf(g_rib_ctx->output, "[...]"); // Placeholder - specific handlers override
-        } else if (strcmp(token, "fov") == 0 ||
-                   strcmp(token, "intensity") == 0 ||
-                   strcmp(token, "Ka") == 0 ||
-                   strcmp(token, "Kd") == 0 ||
-                   strcmp(token, "Ks") == 0 ||
-                   strcmp(token, "roughness") == 0 ||
-                   strcmp(token, "mindistance") == 0 ||
-                   strcmp(token, "maxdistance") == 0 ||
-                   strcmp(token, "distance") == 0) {
-            // Single float
-            float* fval = (float*)values[i];
-            fprintf(g_rib_ctx->output, "%g", *fval);
-        } else if (strcmp(token, "from") == 0 ||
-                   strcmp(token, "to") == 0 ||
-                   strcmp(token, "lightcolor") == 0 ||
-                   strcmp(token, "background") == 0) {
-            // 3-float array (point or color)
-            float* fvals = (float*)values[i];
-            write_float_array(fvals, 3);
-        } else if (strcmp(token, "texturename") == 0 ||
-                   strcmp(token, "mapname") == 0 ||
-                   strcmp(token, "filename") == 0) {
-            // String parameter
-            const char* sval = (const char*)values[i];
-            fprintf(g_rib_ctx->output, "\"%s\"", sval ? sval : "");
+        const RibOutBuiltin* bi = ribout_find_builtin(token);
+        if (bi) {
+            /* Standard pre-declared: emit bare name */
+            fprintf(g_rib_ctx->output, " \"%s\" ", token);
+            if (bi->is_string) {
+                const char* sval = (const char*)values[i];
+                fprintf(g_rib_ctx->output, "\"%s\"", sval ? sval : "");
+            } else if (bi->components == 1) {
+                fprintf(g_rib_ctx->output, "%g", *(float*)values[i]);
+            } else {
+                write_float_array((float*)values[i], bi->components);
+            }
         } else {
-            // Default: assume single float
-            float* fval = (float*)values[i];
-            fprintf(g_rib_ctx->output, "%g", *fval);
+            const char* ud = ribout_lookup_user_decl(token);
+            /* User-declared: emit inline type; unknown: emit bare name */
+            if (ud)
+                fprintf(g_rib_ctx->output, " \"%s %s\" ", ud, token);
+            else
+                fprintf(g_rib_ctx->output, " \"%s\" ", token);
+            int comps = ud ? ribout_decl_components(ud) : 1;
+            int is_str = ud ? ribout_decl_is_string(ud) : 0;
+            if (is_str) {
+                const char* sval = (const char*)values[i];
+                fprintf(g_rib_ctx->output, "\"%s\"", sval ? sval : "");
+            } else if (comps == 1) {
+                fprintf(g_rib_ctx->output, "%g", *(float*)values[i]);
+            } else {
+                write_float_array((float*)values[i], comps);
+            }
         }
     }
 }
@@ -185,9 +238,25 @@ static void ribout_FrameEnd(void) {
 }
 
 static void ribout_Declare(const char* name, const char* declaration) {
-    if (!g_rib_ctx || !g_rib_ctx->output) return;
-    write_indent();
-    fprintf(g_rib_ctx->output, "Declare \"%s\" \"%s\"\n", name, declaration);
+    if (!g_rib_ctx || !name || !declaration) return;
+    /* Skip names already in the builtin table */
+    if (ribout_find_builtin(name)) return;
+    if (g_rib_ctx->num_user_decls >= RIBOUT_MAX_DECLS) return;
+    /* Update existing entry if already stored */
+    for (int i = 0; i < g_rib_ctx->num_user_decls; i++) {
+        if (strcmp(g_rib_ctx->user_decls[i].name, name) == 0) {
+            int dcp = (int)strlen(declaration);
+            if (dcp > 127) dcp = 127;
+            memcpy(g_rib_ctx->user_decls[i].decl_str, declaration, dcp);
+            g_rib_ctx->user_decls[i].decl_str[dcp] = '\0';
+            return;
+        }
+    }
+    RibOutDecl* d = &g_rib_ctx->user_decls[g_rib_ctx->num_user_decls++];
+    int ncp = (int)strlen(name);        if (ncp > 63)  ncp = 63;
+    int dcp = (int)strlen(declaration); if (dcp > 127) dcp = 127;
+    memcpy(d->name,     name,        ncp); d->name[ncp]     = '\0';
+    memcpy(d->decl_str, declaration, dcp); d->decl_str[dcp] = '\0';
 }
 
 static void ribout_Format(RtInt xres, RtInt yres, RtFloat aspect) {
@@ -479,26 +548,22 @@ static void ribout_Polygon(RtInt nvertices, RtToken* tokens, RtPointer* values, 
     write_indent();
     fprintf(g_rib_ctx->output, "Polygon");
 
-    // For Polygon, we need to handle "P" specially - it's an array of nvertices*3 floats
+    // P/N/st need vertex-count-aware sizes; all other tokens use write_params
     for (int i = 0; i < count; i++) {
         RtToken token = tokens[i];
         if (!token) break;
 
-        fprintf(g_rib_ctx->output, " \"%s\" ", token);
-
         if (strcmp(token, "P") == 0) {
-            float* pts = (float*)values[i];
-            write_float_array(pts, nvertices * 3);
+            fprintf(g_rib_ctx->output, " \"P\" ");
+            write_float_array((float*)values[i], nvertices * 3);
         } else if (strcmp(token, "N") == 0) {
-            float* norms = (float*)values[i];
-            write_float_array(norms, nvertices * 3);
+            fprintf(g_rib_ctx->output, " \"N\" ");
+            write_float_array((float*)values[i], nvertices * 3);
         } else if (strcmp(token, "st") == 0) {
-            float* st = (float*)values[i];
-            write_float_array(st, nvertices * 2);
+            fprintf(g_rib_ctx->output, " \"st\" ");
+            write_float_array((float*)values[i], nvertices * 2);
         } else {
-            // Default: single float
-            float* fval = (float*)values[i];
-            fprintf(g_rib_ctx->output, "%g", *fval);
+            write_params(&tokens[i], &values[i], 1);
         }
     }
     fprintf(g_rib_ctx->output, "\n");
@@ -509,22 +574,18 @@ static void ribout_Patch(RtToken type, RtToken* tokens, RtPointer* values, int c
     write_indent();
     fprintf(g_rib_ctx->output, "Patch \"%s\"", type ? type : "bilinear");
 
-    // Patch needs special handling for control points
-    // bicubic has 16 points, bilinear has 4
+    // bicubic has 16 control points, bilinear has 4
     int num_pts = (type && strcmp(type, "bicubic") == 0) ? 16 : 4;
 
     for (int i = 0; i < count; i++) {
         RtToken token = tokens[i];
         if (!token) break;
 
-        fprintf(g_rib_ctx->output, " \"%s\" ", token);
-
         if (strcmp(token, "P") == 0) {
-            float* pts = (float*)values[i];
-            write_float_array(pts, num_pts * 3);
+            fprintf(g_rib_ctx->output, " \"P\" ");
+            write_float_array((float*)values[i], num_pts * 3);
         } else {
-            float* fval = (float*)values[i];
-            fprintf(g_rib_ctx->output, "%g", *fval);
+            write_params(&tokens[i], &values[i], 1);
         }
     }
     fprintf(g_rib_ctx->output, "\n");
@@ -542,24 +603,7 @@ static void ribout_LightSource(RtToken name, RtToken* tokens, RtPointer* values,
     if (!g_rib_ctx || !g_rib_ctx->output) return;
     write_indent();
     fprintf(g_rib_ctx->output, "LightSource \"%s\"", name ? name : "");
-
-    // Handle light parameters
-    for (int i = 0; i < count; i++) {
-        RtToken token = tokens[i];
-        if (!token) break;
-
-        fprintf(g_rib_ctx->output, " \"%s\" ", token);
-
-        if (strcmp(token, "from") == 0 || strcmp(token, "to") == 0 ||
-            strcmp(token, "lightcolor") == 0) {
-            float* fvals = (float*)values[i];
-            write_float_array(fvals, 3);
-        } else {
-            // Single float (intensity, coneangle, etc.)
-            float* fval = (float*)values[i];
-            fprintf(g_rib_ctx->output, "%g", *fval);
-        }
-    }
+    write_params(tokens, values, count);
     fprintf(g_rib_ctx->output, "\n");
 }
 

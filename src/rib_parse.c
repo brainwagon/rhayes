@@ -204,6 +204,26 @@ static void set_error(RibParser* p, const char* msg) {
     snprintf(p->error, MAX_ERROR_LEN, "Line %d: %s", p->line_number, msg);
 }
 
+/* Split "float sphere" -> bare="sphere", decl="float". Returns 1 if split. */
+static int parse_inline_token(const char* raw,
+                               char* bare, int bare_size,
+                               char* decl, int decl_size) {
+    const char* last_sp = NULL;
+    for (const char* q = raw; *q; q++) if (*q == ' ') last_sp = q;
+    if (!last_sp) {
+        int len = (int)strlen(raw);
+        int cp = len < bare_size - 1 ? len : bare_size - 1;
+        memcpy(bare, raw, cp); bare[cp] = '\0'; decl[0] = '\0'; return 0;
+    }
+    int nlen = (int)strlen(last_sp + 1);
+    int ncp = nlen < bare_size - 1 ? nlen : bare_size - 1;
+    memcpy(bare, last_sp + 1, ncp); bare[ncp] = '\0';
+    int dlen = (int)(last_sp - raw);
+    int dcp = dlen < decl_size - 1 ? dlen : decl_size - 1;
+    memcpy(decl, raw, dcp); decl[dcp] = '\0';
+    return 1;
+}
+
 static int expect_number(RibParser* p, double* out) {
     if (p->current_token.type != TOK_NUMBER) {
         set_error(p, "Expected number");
@@ -292,7 +312,12 @@ static int parse_Projection(RibParser* p) {
     int param_count = 0;
 
     while (p->current_token.type == TOK_STRING) {
-        tokens[param_count] = strdup(p->current_token.value.string);
+        char bare_name[64], decl_str[128];
+        int has_inline = parse_inline_token(p->current_token.value.string,
+            bare_name, sizeof(bare_name), decl_str, sizeof(decl_str));
+        if (has_inline && p->callbacks->Declare)
+            p->callbacks->Declare(bare_name, decl_str);
+        tokens[param_count] = strdup(bare_name);
         next_token(p);
 
         if (p->current_token.type == TOK_NUMBER) {
@@ -456,7 +481,12 @@ static int parse_Attribute(RibParser* p) {
     int param_count = 0;
 
     while (p->current_token.type == TOK_STRING) {
-        tokens[param_count] = strdup(p->current_token.value.string);
+        char bare_name[64], decl_str[128];
+        int has_inline = parse_inline_token(p->current_token.value.string,
+            bare_name, sizeof(bare_name), decl_str, sizeof(decl_str));
+        if (has_inline && p->callbacks->Declare)
+            p->callbacks->Declare(bare_name, decl_str);
+        tokens[param_count] = strdup(bare_name);
         arrays[param_count] = NULL;
         strings[param_count] = NULL;
         next_token(p);
@@ -504,7 +534,12 @@ static int parse_Option(RibParser* p) {
     int param_count = 0;
 
     while (p->current_token.type == TOK_STRING) {
-        tokens[param_count] = strdup(p->current_token.value.string);
+        char bare_name[64], decl_str[128];
+        int has_inline = parse_inline_token(p->current_token.value.string,
+            bare_name, sizeof(bare_name), decl_str, sizeof(decl_str));
+        if (has_inline && p->callbacks->Declare)
+            p->callbacks->Declare(bare_name, decl_str);
+        tokens[param_count] = strdup(bare_name);
         arrays[param_count] = NULL;
         strings[param_count] = NULL;
         next_token(p);
@@ -549,7 +584,12 @@ static int parse_Hider(RibParser* p) {
     int param_count = 0;
 
     while (p->current_token.type == TOK_STRING) {
-        tokens[param_count] = strdup(p->current_token.value.string);
+        char bare_name[64], decl_str[128];
+        int has_inline = parse_inline_token(p->current_token.value.string,
+            bare_name, sizeof(bare_name), decl_str, sizeof(decl_str));
+        if (has_inline && p->callbacks->Declare)
+            p->callbacks->Declare(bare_name, decl_str);
+        tokens[param_count] = strdup(bare_name);
         arrays[param_count] = NULL;
         next_token(p);
 
@@ -692,7 +732,12 @@ static int parse_Atmosphere(RibParser* p) {
     int string_count = 0;
 
     while (p->current_token.type == TOK_STRING) {
-        tokens[param_count] = strdup(p->current_token.value.string);
+        char bare_name[64], decl_str[128];
+        int has_inline = parse_inline_token(p->current_token.value.string,
+            bare_name, sizeof(bare_name), decl_str, sizeof(decl_str));
+        if (has_inline && p->callbacks->Declare)
+            p->callbacks->Declare(bare_name, decl_str);
+        tokens[param_count] = strdup(bare_name);
         next_token(p);
 
         if (p->current_token.type == TOK_NUMBER) {
@@ -746,18 +791,35 @@ static int parse_Surface(RibParser* p) {
     RtToken tokens[MAX_PARAMS];
     RtPointer values[MAX_PARAMS];
     float param_values[MAX_PARAMS];
+    float* arrays[MAX_PARAMS];
     char* string_values[MAX_PARAMS];
     int param_count = 0;
     int string_count = 0;
 
+    for (int i = 0; i < MAX_PARAMS; i++) {
+        arrays[i] = NULL;
+        string_values[i] = NULL;
+    }
+
     while (p->current_token.type == TOK_STRING) {
-        tokens[param_count] = strdup(p->current_token.value.string);
+        char bare_name[64], decl_str[128];
+        int has_inline = parse_inline_token(p->current_token.value.string,
+            bare_name, sizeof(bare_name), decl_str, sizeof(decl_str));
+        if (has_inline && p->callbacks->Declare)
+            p->callbacks->Declare(bare_name, decl_str);
+        tokens[param_count] = strdup(bare_name);
         next_token(p);
 
         if (p->current_token.type == TOK_NUMBER) {
             param_values[param_count] = (float)p->current_token.value.number;
             values[param_count] = &param_values[param_count];
             next_token(p);
+        } else if (p->current_token.type == TOK_LBRACKET) {
+            int count;
+            if (read_float_array(p, &count) < 0) return -1;
+            arrays[param_count] = (float*)malloc(count * sizeof(float));
+            memcpy(arrays[param_count], p->float_array, count * sizeof(float));
+            values[param_count] = arrays[param_count];
         } else if (p->current_token.type == TOK_STRING) {
             string_values[string_count] = strdup(p->current_token.value.string);
             values[param_count] = string_values[string_count];
@@ -772,6 +834,7 @@ static int parse_Surface(RibParser* p) {
 
     for (int i = 0; i < param_count; i++) {
         free(tokens[i]);
+        if (arrays[i]) free(arrays[i]);
     }
     for (int i = 0; i < string_count; i++) {
         free(string_values[i]);
@@ -875,7 +938,12 @@ static int parse_Polygon(RibParser* p) {
     int nvertices = 0;
 
     while (p->current_token.type == TOK_STRING) {
-        tokens[param_count] = strdup(p->current_token.value.string);
+        char bare_name[64], decl_str[128];
+        int has_inline = parse_inline_token(p->current_token.value.string,
+            bare_name, sizeof(bare_name), decl_str, sizeof(decl_str));
+        if (has_inline && p->callbacks->Declare)
+            p->callbacks->Declare(bare_name, decl_str);
+        tokens[param_count] = strdup(bare_name);
         next_token(p);
 
         if (p->current_token.type == TOK_LBRACKET) {
@@ -886,7 +954,7 @@ static int parse_Polygon(RibParser* p) {
             memcpy(arrays[param_count], p->float_array, count * sizeof(float));
             values[param_count] = arrays[param_count];
 
-            // Infer nvertices from "P" array
+            // Infer nvertices from "P" array (bare name after inline split)
             if (strcmp(tokens[param_count], "P") == 0) {
                 nvertices = count / 3;
             }
@@ -914,7 +982,12 @@ static int parse_Patch(RibParser* p) {
     int param_count = 0;
 
     while (p->current_token.type == TOK_STRING) {
-        tokens[param_count] = strdup(p->current_token.value.string);
+        char bare_name[64], decl_str[128];
+        int has_inline = parse_inline_token(p->current_token.value.string,
+            bare_name, sizeof(bare_name), decl_str, sizeof(decl_str));
+        if (has_inline && p->callbacks->Declare)
+            p->callbacks->Declare(bare_name, decl_str);
+        tokens[param_count] = strdup(bare_name);
         next_token(p);
 
         if (p->current_token.type == TOK_LBRACKET) {
@@ -965,7 +1038,12 @@ static int parse_LightSource(RibParser* p) {
     for (int i = 0; i < MAX_PARAMS; i++) string_values[i] = NULL;
 
     while (p->current_token.type == TOK_STRING) {
-        tokens[param_count] = strdup(p->current_token.value.string);
+        char bare_name[64], decl_str[128];
+        int has_inline = parse_inline_token(p->current_token.value.string,
+            bare_name, sizeof(bare_name), decl_str, sizeof(decl_str));
+        if (has_inline && p->callbacks->Declare)
+            p->callbacks->Declare(bare_name, decl_str);
+        tokens[param_count] = strdup(bare_name);
         next_token(p);
 
         if (p->current_token.type == TOK_NUMBER) {
