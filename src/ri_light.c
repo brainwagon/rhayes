@@ -6,6 +6,7 @@
 
 #include "ri_internal.h"
 #include "rh_sl_vm.h"
+#include "xpt.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -28,7 +29,7 @@ static bool light_search_cb(bool is_builtin, const char* dir, void* user) {
             strcmp(s->name, "pointlight") == 0 ||
             strcmp(s->name, "distantlight") == 0 ||
             strcmp(s->name, "spotlight") == 0) {
-            fprintf(stderr, "shader: loaded builtin light '%s'\n", s->name);
+            xpt_debug("ri.light", "shader: loaded builtin light '%s'", s->name);
             s->found = true;
             return true;
         }
@@ -138,7 +139,7 @@ RtToken RiLightSourceV(RtToken name, RtToken* tokens, RtPointer* values, int cou
     if (shadowmap_file) {
         l->shadowmap = ri_shadowmap_read(shadowmap_file);
         if (!l->shadowmap) {
-            fprintf(stderr, "Warning: Failed to load shadow map '%s' for light\n", shadowmap_file);
+            xpt_warn("ri.light", "Failed to load shadow map '%s' for light", shadowmap_file);
         }
     }
 

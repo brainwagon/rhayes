@@ -1,6 +1,7 @@
 // catrib - Parse a RIB file and write it back out (potentially in different format)
 #include "rib_parse.h"
 #include "rib_output.h"
+#include "xpt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,7 @@ static void print_usage(const char* progname) {
     fprintf(stderr, "  -o <file>   Output to file (default: stdout)\n");
     fprintf(stderr, "  -ascii      Force ASCII output (default)\n");
     fprintf(stderr, "  -binary     Force binary output (not yet implemented)\n");
+    fprintf(stderr, "  -e, --expand  Expand ReadArchive calls inline\n");
     fprintf(stderr, "  -h          Show this help\n");
 }
 
@@ -18,6 +20,7 @@ int main(int argc, char** argv) {
     const char* input_file = NULL;
     const char* output_file = NULL;
     int binary_mode = 0;
+    int expand_archives = 0;
 
     // Parse arguments
     for (int i = 1; i < argc; i++) {
@@ -33,6 +36,8 @@ int main(int argc, char** argv) {
             binary_mode = 1;
             fprintf(stderr, "Warning: Binary output not yet implemented, using ASCII\n");
             binary_mode = 0;
+        } else if (strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--expand") == 0) {
+            expand_archives = 1;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -55,9 +60,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    xpt_init();
+    xpt_set_level("", XPT_LEVEL_WARN);
+
     // Initialize RIB output
     if (rib_output_begin(output_file, binary_mode) < 0) {
-        fprintf(stderr, "Error: Failed to open output\n");
+        xpt_fatal("catrib", "Failed to open output");
         return 1;
     }
 
@@ -67,9 +75,13 @@ int main(int argc, char** argv) {
     // Create parser with output callbacks
     RibParser* parser = rib_parser_create(callbacks);
     if (!parser) {
-        fprintf(stderr, "Error: Failed to create parser\n");
+        xpt_fatal("rib.parse", "Failed to create parser");
         rib_output_end();
         return 1;
+    }
+
+    if (expand_archives) {
+        rib_parser_set_expand_archives(parser, 1);
     }
 
     // Parse the input file
@@ -78,7 +90,7 @@ int main(int argc, char** argv) {
     if (result != 0) {
         const char* err = rib_parser_get_error(parser);
         if (err) {
-            fprintf(stderr, "Parse error: %s\n", err);
+            xpt_error("rib.parse", "Parse error: %s", err);
         }
     }
 

@@ -11,6 +11,7 @@
 #include "rh_sl_codegen.h"
 #include "rh_sl_parse.h"
 #include "rh_sl_sema.h"
+#include "xpt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +20,7 @@
 static char* read_file(const char* path) {
     FILE* f = fopen(path, "r");
     if (!f) {
-        fprintf(stderr, "shader: cannot open '%s'\n", path);
+        xpt_error("sl.compiler", "cannot open '%s'", path);
         return NULL;
     }
     fseek(f, 0, SEEK_END);
@@ -95,6 +96,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    xpt_init();
+    xpt_set_level("", XPT_LEVEL_WARN);
+
     /* Default output path */
     if (!output_path) {
         output_alloc = default_output(input_path);
@@ -111,8 +115,8 @@ int main(int argc, char** argv) {
     RhSLNode* ast = rh_sl_parse(&parser);
     if (!ast || parser.num_errors > 0) {
         for (int i = 0; i < parser.num_errors; i++)
-            fprintf(stderr, "%s: %s\n", input_path, parser.errors[i]);
-        if (!ast) fprintf(stderr, "%s: parse failed\n", input_path);
+            xpt_error("sl.compiler", "%s: %s", input_path, parser.errors[i]);
+        if (!ast) xpt_error("sl.compiler", "%s: parse failed", input_path);
         if (ast) rh_sl_node_free(ast);
         free(source);
         free(output_alloc);
@@ -124,7 +128,7 @@ int main(int argc, char** argv) {
     rh_sl_sema_init(&sema);
     if (rh_sl_sema_analyze(&sema, ast) != 0) {
         for (int i = 0; i < sema.num_errors; i++)
-            fprintf(stderr, "%s: %s\n", input_path, sema.errors[i]);
+            xpt_error("sl.compiler", "%s: %s", input_path, sema.errors[i]);
         rh_sl_node_free(ast);
         free(source);
         free(output_alloc);
@@ -136,7 +140,7 @@ int main(int argc, char** argv) {
     RhSLProgram* prog = rh_sl_codegen(ast, &errs);
     if (!prog) {
         for (int i = 0; i < errs.num_errors; i++)
-            fprintf(stderr, "%s: %s\n", input_path, errs.errors[i]);
+            xpt_error("sl.compiler", "%s: %s", input_path, errs.errors[i]);
         rh_sl_node_free(ast);
         free(source);
         free(output_alloc);
@@ -145,7 +149,7 @@ int main(int argc, char** argv) {
 
     /* Write .slo */
     if (rh_sl_slo_write(output_path, prog) != 0) {
-        fprintf(stderr, "shader: failed to write '%s'\n", output_path);
+        xpt_error("sl.compiler", "failed to write '%s'", output_path);
         rh_sl_program_free(prog);
         rh_sl_node_free(ast);
         free(source);

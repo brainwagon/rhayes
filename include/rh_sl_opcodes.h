@@ -135,15 +135,18 @@ typedef enum {
     OP_PNOISE    = 0x76,  /* dst = pnoise(src1, src2) */
     OP_CELLNOISE = 0x77,  /* dst = cellnoise(src1) */
 
-    /* 0x90-0x97: Special operations */
-    OP_TRANSFORM  = 0x90, /* dst = transform("space", src1) */
-    OP_NTRANSFORM = 0x91, /* dst = ntransform("space", src1) */
-    OP_VTRANSFORM = 0x92, /* dst = vtransform("space", src1) */
+    /* 0x90-0x9F: Special operations */
+    OP_TRANSFORM  = 0x90, /* dst = transform("space", src1); src2 = string index */
+    OP_NTRANSFORM = 0x91, /* dst = ntransform("space", src1); src2 = string index */
+    OP_VTRANSFORM = 0x92, /* dst = vtransform("space", src1); src2 = string index */
     OP_DU         = 0x93, /* dst = Du(src1) */
     OP_DV         = 0x94, /* dst = Dv(src1) */
     OP_AREA       = 0x95, /* dst = area(P) */
     OP_CALCNORMAL = 0x96, /* dst = calculatenormal(P) */
     OP_PRINTF     = 0x97, /* printf(string_table[src1], ...) */
+    OP_TRANSFORM_INV  = 0x98, /* dst = transform from named space to current */
+    OP_NTRANSFORM_INV = 0x99, /* dst = ntransform from named space to current */
+    OP_VTRANSFORM_INV = 0x9A, /* dst = vtransform from named space to current */
 
     /* 0xA0-0xA1: Function calls */
     OP_CALL    = 0xA0,  /* Push PC; PC = dst; args already in registers */

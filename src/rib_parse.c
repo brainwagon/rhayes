@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "rib_parse.h"
 #include "ri_callbacks.h"
+#include "xpt.h"
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -11,6 +12,7 @@
 #define MAX_ARRAY_SIZE 65536
 #define MAX_PARAMS 64
 #define MAX_ERROR_LEN 256
+#define MAX_READARCHIVE_DEPTH 16
 
 // Token types
 typedef enum {
@@ -45,12 +47,18 @@ struct RibParser {
     // Temporary storage for arrays
     float* float_array;
     int float_array_capacity;
+
+    // ReadArchive support
+    char current_dir[512];
+    int depth;
+    int expand_archives;
 };
 
 // Forward declarations
 static void next_token(RibParser* p);
 static int parse_command(RibParser* p);
 static void set_error(RibParser* p, const char* msg);
+static int rib_parser_parse_stream_internal(RibParser* parser, FILE* stream);
 
 // --- Lexer ---
 
@@ -350,6 +358,16 @@ static int parse_Shutter(RibParser* p) {
     return 0;
 }
 
+static int parse_Clipping(RibParser* p) {
+    double nearclip, farclip;
+    if (expect_number(p, &nearclip) < 0) return -1;
+    if (expect_number(p, &farclip) < 0) return -1;
+    if (p->callbacks->Clipping) {
+        p->callbacks->Clipping((RtFloat)nearclip, (RtFloat)farclip);
+    }
+    return 0;
+}
+
 static int parse_MotionBegin(RibParser* p) {
     // MotionBegin [t0 t1 ...]
     int count;
@@ -586,6 +604,15 @@ static int parse_Scale(RibParser* p) {
     if (expect_number(p, &y) < 0) return -1;
     if (expect_number(p, &z) < 0) return -1;
     p->callbacks->Scale((RtFloat)x, (RtFloat)y, (RtFloat)z);
+    return 0;
+}
+
+static int parse_CoordinateSystem(RibParser* p) {
+    char name[64];
+    if (expect_string(p, name, sizeof(name)) < 0) return -1;
+    if (p->callbacks->CoordinateSystem) {
+        p->callbacks->CoordinateSystem(name);
+    }
     return 0;
 }
 
@@ -1015,6 +1042,109 @@ static int parse_ObjectInstance(RibParser* p) {
     return 0;
 }
 
+static int parse_ReadArchive(RibParser* p) {
+    char filename[512];
+    if (expect_string(p, filename, sizeof(filename)) < 0) return -1;
+
+    /* If not expanding and a callback exists, just pass through */
+    if (!p->expand_archives && p->callbacks->ReadArchive) {
+        p->callbacks->ReadArchive(filename);
+        return 0;
+    }
+
+    if (p->depth >= MAX_READARCHIVE_DEPTH) {
+        set_error(p, "ReadArchive nesting too deep");
+        return -1;
+    }
+
+    /* Resolve path relative to current file's directory */
+    char resolved[1024];
+    if (filename[0] == '/') {
+        /* Absolute path */
+        int len = (int)strlen(filename);
+        int cp = len < (int)sizeof(resolved) - 1 ? len : (int)sizeof(resolved) - 1;
+        memcpy(resolved, filename, cp);
+        resolved[cp] = '\0';
+    } else {
+        int dlen = (int)strlen(p->current_dir);
+        int flen = (int)strlen(filename);
+        if (dlen + 1 + flen >= (int)sizeof(resolved)) {
+            set_error(p, "ReadArchive path too long");
+            return -1;
+        }
+        memcpy(resolved, p->current_dir, dlen);
+        resolved[dlen] = '/';
+        memcpy(resolved + dlen + 1, filename, flen);
+        resolved[dlen + 1 + flen] = '\0';
+    }
+
+    FILE* f = fopen(resolved, "r");
+    if (!f) {
+        xpt_warn("rib.parse", "ReadArchive cannot open \"%s\" (skipping)", resolved);
+        return 0;
+    }
+
+    /* Save parser state */
+    FILE* saved_input = p->input;
+    int saved_line = p->line_number;
+    int saved_has_peek = p->has_peek;
+    int saved_peek = p->peek_char;
+    RibToken saved_token = p->current_token;
+    char saved_dir[512];
+    memcpy(saved_dir, p->current_dir, sizeof(saved_dir));
+
+    /* Compute new current_dir from resolved path */
+    {
+        int len = (int)strlen(resolved);
+        int last_slash = -1;
+        for (int i = len - 1; i >= 0; i--) {
+            if (resolved[i] == '/') { last_slash = i; break; }
+        }
+        if (last_slash > 0) {
+            memcpy(p->current_dir, resolved, last_slash);
+            p->current_dir[last_slash] = '\0';
+        } else {
+            p->current_dir[0] = '.';
+            p->current_dir[1] = '\0';
+        }
+    }
+
+    /* Parse the included file */
+    p->input = f;
+    p->line_number = 1;
+    p->has_peek = 0;
+    p->depth++;
+
+    next_token(p);
+    while (p->current_token.type != TOK_EOF) {
+        if (parse_command(p) < 0) {
+            p->depth--;
+            fclose(f);
+            /* Restore state so caller can report error context */
+            p->input = saved_input;
+            p->line_number = saved_line;
+            p->has_peek = saved_has_peek;
+            p->peek_char = saved_peek;
+            p->current_token = saved_token;
+            memcpy(p->current_dir, saved_dir, sizeof(saved_dir));
+            return -1;
+        }
+    }
+
+    p->depth--;
+    fclose(f);
+
+    /* Restore parser state */
+    p->input = saved_input;
+    p->line_number = saved_line;
+    p->has_peek = saved_has_peek;
+    p->peek_char = saved_peek;
+    p->current_token = saved_token;
+    memcpy(p->current_dir, saved_dir, sizeof(saved_dir));
+
+    return 0;
+}
+
 // --- Main Command Dispatcher ---
 
 typedef struct {
@@ -1047,9 +1177,11 @@ static const CommandEntry commands[] = {
     {"AttributeBegin", cmd_AttributeBegin},
     {"AttributeEnd", cmd_AttributeEnd},
     {"Basis", parse_Basis},
+    {"Clipping", parse_Clipping},
     {"Color", parse_Color},
     {"ConcatTransform", parse_ConcatTransform},
     {"Cone", parse_Cone},
+    {"CoordinateSystem", parse_CoordinateSystem},
     {"Cylinder", parse_Cylinder},
     {"Declare", parse_Declare},
     {"DepthOfField", parse_DepthOfField},
@@ -1079,6 +1211,7 @@ static const CommandEntry commands[] = {
     {"PixelSamples", parse_PixelSamples},
     {"Polygon", parse_Polygon},
     {"Projection", parse_Projection},
+    {"ReadArchive", parse_ReadArchive},
     {"ReverseOrientation", cmd_ReverseOrientation},
     {"Rotate", parse_Rotate},
     {"Scale", parse_Scale},
@@ -1132,8 +1265,8 @@ static int parse_command(RibParser* p) {
     int copy_len = cmd_len < 63 ? cmd_len : 63;
     memcpy(cmd_truncated, cmd, copy_len);
     cmd_truncated[copy_len] = '\0';
-    fprintf(stderr, "Warning: Unknown command: %s (skipping) at line %d\n",
-            cmd_truncated, p->line_number);
+    xpt_warn("rib.parse", "Unknown command: %s (skipping) at line %d",
+             cmd_truncated, p->line_number);
     next_token(p);
     return 0;
 }
@@ -1173,18 +1306,37 @@ int rib_parser_parse_file(RibParser* parser, const char* filename) {
         return -1;
     }
 
-    int result = rib_parser_parse_stream(parser, f);
+    /* Extract directory from filename for ReadArchive resolution */
+    {
+        int len = (int)strlen(filename);
+        int last_slash = -1;
+        for (int i = len - 1; i >= 0; i--) {
+            if (filename[i] == '/') { last_slash = i; break; }
+        }
+        if (last_slash > 0) {
+            int cp = last_slash < (int)sizeof(parser->current_dir) - 1
+                     ? last_slash : (int)sizeof(parser->current_dir) - 1;
+            memcpy(parser->current_dir, filename, cp);
+            parser->current_dir[cp] = '\0';
+        } else {
+            parser->current_dir[0] = '.';
+            parser->current_dir[1] = '\0';
+        }
+    }
+
+    int result = rib_parser_parse_stream_internal(parser, f);
     fclose(f);
     return result;
 }
 
-int rib_parser_parse_stream(RibParser* parser, FILE* stream) {
+static int rib_parser_parse_stream_internal(RibParser* parser, FILE* stream) {
     if (!parser || !stream) return -1;
 
     parser->input = stream;
     parser->line_number = 1;
     parser->has_peek = 0;
     parser->error[0] = '\0';
+    parser->depth = 0;
 
     // Call Begin
     parser->callbacks->Begin(NULL);
@@ -1203,6 +1355,19 @@ int rib_parser_parse_stream(RibParser* parser, FILE* stream) {
     // Call End
     parser->callbacks->End();
     return 0;
+}
+
+int rib_parser_parse_stream(RibParser* parser, FILE* stream) {
+    if (!parser || !stream) return -1;
+
+    parser->current_dir[0] = '.';
+    parser->current_dir[1] = '\0';
+
+    return rib_parser_parse_stream_internal(parser, stream);
+}
+
+void rib_parser_set_expand_archives(RibParser* parser, int expand) {
+    if (parser) parser->expand_archives = expand;
 }
 
 const char* rib_parser_get_error(RibParser* parser) {

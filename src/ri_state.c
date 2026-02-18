@@ -5,6 +5,7 @@
  */
 
 #include "ri_internal.h"
+#include "xpt.h"
 
 // --- State Stack ---
 
@@ -53,11 +54,11 @@ void RiMotionBeginV(RtInt n, RtFloat* times) {
     RiContextData* ctx = ri_get_ctx();
     if (!ctx) return;
     if (n != 2) {
-        fprintf(stderr, "Warning: RiMotionBegin only supports n=2 (two-sample motion)\n");
+        xpt_warn("ri.state", "RiMotionBegin only supports n=2 (two-sample motion)");
         return;
     }
     if (ctx->motion_active) {
-        fprintf(stderr, "Warning: Nested MotionBegin blocks not supported\n");
+        xpt_warn("ri.state", "Nested MotionBegin blocks not supported");
         return;
     }
 
@@ -78,7 +79,7 @@ void RiMotionBegin(RtInt n, ...) {
     RiContextData* ctx = ri_get_ctx();
     if (!ctx) return;
     if (n != 2) {
-        fprintf(stderr, "Warning: RiMotionBegin only supports n=2 (two-sample motion)\n");
+        xpt_warn("ri.state", "RiMotionBegin only supports n=2 (two-sample motion)");
         return;
     }
 
@@ -97,7 +98,7 @@ void RiMotionEnd(void) {
     RiContextData* ctx = ri_get_ctx();
     if (!ctx) return;
     if (!ctx->motion_active) {
-        fprintf(stderr, "Warning: RiMotionEnd without RiMotionBegin\n");
+        xpt_warn("ri.state", "RiMotionEnd without RiMotionBegin");
         return;
     }
 
@@ -231,6 +232,29 @@ void RiScale(RtFloat sx, RtFloat sy, RtFloat sz) {
     }
 }
 
+void RiCoordinateSystem(RtToken name) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    if (!name) return;
+    if (ctx->num_named_coord_sys >= MAX_NAMED_COORD_SYS) {
+        xpt_warn("ri.state", "RiCoordinateSystem: too many named coordinate systems");
+        return;
+    }
+    /* Check if name already exists and overwrite */
+    for (int i = 0; i < ctx->num_named_coord_sys; i++) {
+        if (strcmp(ctx->named_coord_sys[i].name, name) == 0) {
+            ctx->named_coord_sys[i].matrix = ri_curr()->transform;
+            return;
+        }
+    }
+    RhNamedCoordSys* cs = &ctx->named_coord_sys[ctx->num_named_coord_sys++];
+    size_t len = strlen(name);
+    if (len >= sizeof(cs->name)) len = sizeof(cs->name) - 1;
+    memcpy(cs->name, name, len);
+    cs->name[len] = '\0';
+    cs->matrix = ri_curr()->transform;
+}
+
 void RiBasis(RtMatrix ubasis, RtInt ustep, RtMatrix vbasis, RtInt vstep) {
     RiContextData* ctx = ri_get_ctx();
     if (!ctx) return;
@@ -317,7 +341,7 @@ static RhImplAttribute* ri_find_or_create_attr(const char* category, const char*
 
     // Create new entry if space available
     if (state->num_impl_attrs >= MAX_IMPL_ATTRIBUTES) {
-        fprintf(stderr, "Warning: Maximum implementation attributes exceeded\n");
+        xpt_warn("ri.state", "Maximum implementation attributes exceeded");
         return NULL;
     }
 

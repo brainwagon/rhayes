@@ -12,6 +12,7 @@
 #include "rh_sl_codegen.h"
 #include "rh_sl_parse.h"
 #include "rh_sl_sema.h"
+#include "xpt.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -72,7 +73,7 @@ static RhSLProgram* sl_compile_source(const char* source, const char* filename) 
     RhSLNode* ast = rh_sl_parse(&parser);
     if (!ast || parser.num_errors > 0) {
         for (int i = 0; i < parser.num_errors; i++)
-            fprintf(stderr, "%s: %s\n", filename, parser.errors[i]);
+            xpt_error("ri.primitive", "%s: %s", filename, parser.errors[i]);
         if (ast) rh_sl_node_free(ast);
         return NULL;
     }
@@ -81,7 +82,7 @@ static RhSLProgram* sl_compile_source(const char* source, const char* filename) 
     rh_sl_sema_init(&sema);
     if (rh_sl_sema_analyze(&sema, ast) != 0) {
         for (int i = 0; i < sema.num_errors; i++)
-            fprintf(stderr, "%s: %s\n", filename, sema.errors[i]);
+            xpt_error("ri.primitive", "%s: %s", filename, sema.errors[i]);
         rh_sl_node_free(ast);
         return NULL;
     }
@@ -90,7 +91,7 @@ static RhSLProgram* sl_compile_source(const char* source, const char* filename) 
     RhSLProgram* prog = rh_sl_codegen(ast, &errs);
     if (!prog) {
         for (int i = 0; i < errs.num_errors; i++)
-            fprintf(stderr, "%s: %s\n", filename, errs.errors[i]);
+            xpt_error("ri.primitive", "%s: %s", filename, errs.errors[i]);
     }
     rh_sl_node_free(ast);
     return prog;
@@ -108,7 +109,7 @@ RhSLProgram* sl_try_load_from_dir(const char* name, const char* dir) {
     if (n >= 0 && (size_t)n < sizeof(path)) {
         prog = rh_sl_slo_read(path);
         if (prog) {
-            fprintf(stderr, "shader: loaded '%s' from '%s'\n", name, path);
+            xpt_debug("ri.primitive", "shader: loaded '%s' from '%s'", name, path);
             sl_cache_add(name, prog);
             return prog;
         }
@@ -119,11 +120,11 @@ RhSLProgram* sl_try_load_from_dir(const char* name, const char* dir) {
     if (n >= 0 && (size_t)n < sizeof(path)) {
         char* source = sl_read_file(path);
         if (source) {
-            fprintf(stderr, "shader: compiling '%s' from '%s'\n", name, path);
+            xpt_debug("ri.primitive", "shader: compiling '%s' from '%s'", name, path);
             prog = sl_compile_source(source, path);
             free(source);
             if (prog) {
-                fprintf(stderr, "shader: loaded '%s' from '%s'\n", name, path);
+                xpt_debug("ri.primitive", "shader: loaded '%s' from '%s'", name, path);
                 sl_cache_add(name, prog);
                 return prog;
             }
@@ -1128,7 +1129,7 @@ static bool ri_set_builtin_surface(RtToken name, RhShaderFunc func,
                         params->texturename[tlen] = '\0';
                         params->texture = ri_texture_load(texname, RH_TEX_RGB);
                         if (!params->texture) {
-                            fprintf(stderr, "Warning: Failed to load texture '%s'\n", texname);
+                            xpt_warn("ri.primitive", "Failed to load texture '%s'", texname);
                         }
                     }
                 } else if (strcmp(token, "Ka") == 0) {
@@ -1198,12 +1199,12 @@ static bool surface_search_cb(bool is_builtin, const char* dir, void* user) {
             s->found = ri_set_builtin_surface(s->name, NULL,
                                               s->tokens, s->values, s->count);
             if (s->found)
-                fprintf(stderr, "shader: loaded builtin surface '%s'\n", s->name);
+                xpt_debug("ri.primitive", "shader: loaded builtin surface '%s'", s->name);
             return s->found;
         }
         RhShaderFunc func = builtin_surface_lookup(s->name);
         if (func) {
-            fprintf(stderr, "shader: loaded builtin surface '%s'\n", s->name);
+            xpt_debug("ri.primitive", "shader: loaded builtin surface '%s'", s->name);
             ri_curr()->current_surface_shader = func;
             ri_curr()->current_shader_params = NULL;
             s->found = true;
@@ -1228,7 +1229,7 @@ void RiSurfaceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
     ri_iterate_searchpath(surface_search_cb, &sctx);
 
     if (!sctx.found) {
-        fprintf(stderr, "Warning: shader '%s' not found\n", name);
+        xpt_warn("ri.primitive", "shader '%s' not found", name);
     }
 }
 
@@ -1331,7 +1332,7 @@ static bool atmosphere_search_cb(bool is_builtin, const char* dir, void* user) {
             s->found = ri_set_builtin_atmosphere(s->name, s->tokens,
                                                  s->values, s->count);
             if (s->found)
-                fprintf(stderr, "shader: loaded builtin atmosphere '%s'\n", s->name);
+                xpt_debug("ri.primitive", "shader: loaded builtin atmosphere '%s'", s->name);
             return s->found;
         }
     } else {
@@ -1372,7 +1373,7 @@ void RiAtmosphereV(RtToken name, RtToken* tokens, RtPointer* values, int count) 
     ri_iterate_searchpath(atmosphere_search_cb, &sctx);
 
     if (!sctx.found) {
-        fprintf(stderr, "Warning: Unknown atmosphere shader '%s'\n", name);
+        xpt_warn("ri.primitive", "Unknown atmosphere shader '%s'", name);
     }
 }
 

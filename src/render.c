@@ -2,6 +2,7 @@
 #include "rib_parse.h"
 #include "ri.h"
 #include "ri_callbacks.h"
+#include "xpt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -78,6 +79,10 @@ static void render_Shutter(RtFloat open, RtFloat close) {
     RiShutter(open, close);
 }
 
+static void render_Clipping(RtFloat nearclip, RtFloat farclip) {
+    RiClipping(nearclip, farclip);
+}
+
 static void render_ShadingRate(RtFloat size) {
     RiShadingRate(size);
 }
@@ -136,6 +141,10 @@ static void render_Rotate(RtFloat angle, RtFloat dx, RtFloat dy, RtFloat dz) {
 
 static void render_Scale(RtFloat sx, RtFloat sy, RtFloat sz) {
     RiScale(sx, sy, sz);
+}
+
+static void render_CoordinateSystem(RtToken name) {
+    RiCoordinateSystem(name);
 }
 
 static void render_Basis(RtToken ubasis, RtInt ustep, RtToken vbasis, RtInt vstep) {
@@ -285,6 +294,7 @@ RiCallbacks ri_render_callbacks = {
     .PixelFilter = render_PixelFilter,
     .DepthOfField = render_DepthOfField,
     .Shutter = render_Shutter,
+    .Clipping = render_Clipping,
     .ShadingRate = render_ShadingRate,
     .Option = render_Option,
     .Hider = render_Hider,
@@ -300,6 +310,7 @@ RiCallbacks ri_render_callbacks = {
     .Translate = render_Translate,
     .Rotate = render_Rotate,
     .Scale = render_Scale,
+    .CoordinateSystem = render_CoordinateSystem,
     .Basis = render_Basis,
     .Color = render_Color,
     .Opacity = render_Opacity,
@@ -350,9 +361,17 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    xpt_init();
+    if (g_verbose >= 2)
+        xpt_set_level("", XPT_LEVEL_DEBUG);
+    else if (g_verbose >= 1)
+        xpt_set_level("", XPT_LEVEL_INFO);
+    else
+        xpt_set_level("", XPT_LEVEL_WARN);
+
     RibParser* parser = rib_parser_create(&ri_render_callbacks);
     if (!parser) {
-        fprintf(stderr, "Error: Failed to create parser\n");
+        xpt_fatal("rib.parse", "Failed to create parser");
         return 1;
     }
 
@@ -361,7 +380,7 @@ int main(int argc, char** argv) {
     if (result != 0) {
         const char* err = rib_parser_get_error(parser);
         if (err) {
-            fprintf(stderr, "Parse error: %s\n", err);
+            xpt_error("rib.parse", "Parse error: %s", err);
         }
     }
 

@@ -230,6 +230,12 @@ static void ribout_DepthOfField(RtFloat fstop, RtFloat focallength, RtFloat foca
     fprintf(g_rib_ctx->output, "DepthOfField %g %g %g\n", fstop, focallength, focaldistance);
 }
 
+static void ribout_Clipping(RtFloat nearclip, RtFloat farclip) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "Clipping %g %g\n", nearclip, farclip);
+}
+
 static void ribout_ShadingRate(RtFloat size) {
     if (!g_rib_ctx || !g_rib_ctx->output) return;
     write_indent();
@@ -318,6 +324,12 @@ static void ribout_Scale(RtFloat sx, RtFloat sy, RtFloat sz) {
     if (!g_rib_ctx || !g_rib_ctx->output) return;
     write_indent();
     fprintf(g_rib_ctx->output, "Scale %g %g %g\n", sx, sy, sz);
+}
+
+static void ribout_CoordinateSystem(RtToken name) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "CoordinateSystem \"%s\"\n", name);
 }
 
 static void ribout_Basis(RtToken ubasis, RtInt ustep, RtToken vbasis, RtInt vstep) {
@@ -578,6 +590,12 @@ static void ribout_ObjectInstance(RtInt handle) {
     fprintf(g_rib_ctx->output, "ObjectInstance %d\n", handle);
 }
 
+static void ribout_ReadArchive(RtToken filename) {
+    if (!g_rib_ctx || !g_rib_ctx->output) return;
+    write_indent();
+    fprintf(g_rib_ctx->output, "ReadArchive \"%s\"\n", filename);
+}
+
 // --- Callback Table ---
 
 RiCallbacks ri_output_callbacks = {
@@ -592,6 +610,7 @@ RiCallbacks ri_output_callbacks = {
     .PixelSamples = ribout_PixelSamples,
     .PixelFilter = ribout_PixelFilter,
     .DepthOfField = ribout_DepthOfField,
+    .Clipping = ribout_Clipping,
     .ShadingRate = ribout_ShadingRate,
     .Option = ribout_Option,
     .AttributeBegin = ribout_AttributeBegin,
@@ -604,6 +623,7 @@ RiCallbacks ri_output_callbacks = {
     .Translate = ribout_Translate,
     .Rotate = ribout_Rotate,
     .Scale = ribout_Scale,
+    .CoordinateSystem = ribout_CoordinateSystem,
     .Basis = ribout_Basis,
     .Color = ribout_Color,
     .Opacity = ribout_Opacity,
@@ -631,6 +651,7 @@ RiCallbacks ri_output_callbacks = {
     .ObjectBegin = ribout_ObjectBegin,
     .ObjectEnd = ribout_ObjectEnd,
     .ObjectInstance = ribout_ObjectInstance,
+    .ReadArchive = ribout_ReadArchive,
 };
 
 RiCallbacks* rib_output_get_callbacks(void) {

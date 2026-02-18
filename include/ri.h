@@ -96,6 +96,7 @@ void RiPixelSamples(RtFloat xsamples, RtFloat ysamples);
 void RiPixelFilter(RtFilterFunc filterfunc, RtFloat xwidth, RtFloat ywidth);
 void RiDepthOfField(RtFloat fstop, RtFloat focallength, RtFloat focaldistance);
 void RiShutter(RtFloat open, RtFloat close);
+void RiClipping(RtFloat nearclip, RtFloat farclip);
 void RiProjection(RtToken name, ...); // Varargs for params (fov, etc.)
 void RiProjectionV(RtToken name, RtToken* tokens, RtPointer* values, int count);
 void RiDisplay(RtToken name, RtToken type, RtToken mode, ...);
@@ -124,6 +125,7 @@ void RiConcatTransform(RtMatrix transform);
 void RiTranslate(RtFloat dx, RtFloat dy, RtFloat dz);
 void RiRotate(RtFloat angle, RtFloat dx, RtFloat dy, RtFloat dz);
 void RiScale(RtFloat sx, RtFloat sy, RtFloat sz);
+void RiCoordinateSystem(RtToken name);
 
 // Basis
 void RiBasis(RtMatrix ubasis, RtInt ustep, RtMatrix vbasis, RtInt vstep);

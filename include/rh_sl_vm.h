@@ -91,6 +91,9 @@ typedef struct {
     /* Search-path-aware loading callbacks (populated by libri) */
     RhTexture*   (*texture_load_cb)(const char* filename, RhTextureFormat format);
     RhShadowMap* (*shadow_read_cb)(const char* filename);
+
+    /* Transform context for coordinate space transforms */
+    RhTransformContext* transform_ctx;
 } RhSLExecState;
 
 /* --- API --- */

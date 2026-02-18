@@ -26,6 +26,7 @@ typedef struct RiCallbacks {
     void (*PixelFilter)(RtToken filtername, RtFloat xwidth, RtFloat ywidth);
     void (*DepthOfField)(RtFloat fstop, RtFloat focallength, RtFloat focaldistance);
     void (*Shutter)(RtFloat open, RtFloat close);
+    void (*Clipping)(RtFloat nearclip, RtFloat farclip);
     void (*ShadingRate)(RtFloat size);
     void (*Option)(RtToken name, RtToken *tokens, RtPointer *values, int count);
     void (*Hider)(RtToken type, RtToken *tokens, RtPointer *values, int count);
@@ -47,6 +48,7 @@ typedef struct RiCallbacks {
     void (*Translate)(RtFloat dx, RtFloat dy, RtFloat dz);
     void (*Rotate)(RtFloat angle, RtFloat dx, RtFloat dy, RtFloat dz);
     void (*Scale)(RtFloat sx, RtFloat sy, RtFloat sz);
+    void (*CoordinateSystem)(RtToken name);
 
     // Basis
     void (*Basis)(RtToken ubasis, RtInt ustep, RtToken vbasis, RtInt vstep);
@@ -94,6 +96,9 @@ typedef struct RiCallbacks {
     void (*ObjectBegin)(void);
     void (*ObjectEnd)(void);
     void (*ObjectInstance)(RtInt handle);
+
+    // Archive inclusion
+    void (*ReadArchive)(RtToken filename);
 
 } RiCallbacks;
 

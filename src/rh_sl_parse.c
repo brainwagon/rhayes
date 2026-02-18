@@ -179,6 +179,10 @@ static void parse_error(RhSLParser* p, const char* msg) {
     }
 }
 
+static int parser_too_many_errors(RhSLParser* p) {
+    return p->num_errors >= RH_SL_MAX_ERRORS;
+}
+
 static RhSLTokenType peek(RhSLParser* p) {
     return p->lex.current.type;
 }
@@ -286,8 +290,10 @@ static RhSLNode* parse_primary(RhSLParser* p) {
                 args = parse_expression(p);
                 RhSLNode* tail = args;
                 while (peek(p) == TOK_COMMA) {
+                    int pos_before = p->lex.pos;
                     advance(p);
                     tail->next = parse_expression(p);
+                    if (p->lex.pos == pos_before) break;
                     tail = tail->next;
                 }
             }
@@ -327,8 +333,10 @@ static RhSLNode* parse_primary(RhSLParser* p) {
                 args = parse_expression(p);
                 RhSLNode* tail = args;
                 while (peek(p) == TOK_COMMA) {
+                    int pos_before = p->lex.pos;
                     advance(p);
                     tail->next = parse_expression(p);
+                    if (p->lex.pos == pos_before) break;
                     tail = tail->next;
                 }
             }
@@ -589,9 +597,15 @@ static RhSLNode* parse_block(RhSLParser* p) {
     RhSLNode* n = rh_sl_node_alloc(SL_NODE_BLOCK, line);
     RhSLNode* stmts = NULL;
 
-    while (peek(p) != TOK_RBRACE && peek(p) != TOK_EOF) {
+    while (peek(p) != TOK_RBRACE && peek(p) != TOK_EOF
+           && !parser_too_many_errors(p)) {
+        int pos_before = p->lex.pos;
         RhSLNode* s = parse_statement(p);
         if (s) stmts = rh_sl_node_append(stmts, s);
+        if (p->lex.pos == pos_before) {
+            parse_error(p, "unexpected token");
+            advance(p);
+        }
     }
 
     n->u.block.stmts = stmts;
@@ -853,6 +867,13 @@ static RhSLNode* parse_expr_statement(RhSLParser* p) {
 }
 
 static RhSLNode* parse_statement(RhSLParser* p) {
+    /* Handle lexer error tokens (bad characters like @, $, lone &/|) */
+    if (peek(p) == TOK_ERROR) {
+        parse_error(p, "invalid character");
+        advance(p);
+        return NULL;
+    }
+
     switch (peek(p)) {
     case TOK_IF:           return parse_if_stmt(p);
     case TOK_WHILE:        return parse_while_stmt(p);
@@ -901,6 +922,7 @@ static RhSLNode* parse_shader_params(RhSLParser* p) {
     }
 
     while (1) {
+        if (parser_too_many_errors(p)) break;
         int line = peek_line(p);
 
         /* Storage qualifiers */
@@ -980,6 +1002,7 @@ static RhSLNode* parse_function_formals(RhSLParser* p) {
     }
 
     while (1) {
+        if (parser_too_many_errors(p)) break;
         int line = peek_line(p);
 
         RhSLStorage storage;
@@ -1036,7 +1059,8 @@ RhSLNode* rh_sl_parse(RhSLParser* parser) {
     RhSLNode* functions = NULL;
 
     /* Parse any preceding function definitions */
-    while (peek(p) != TOK_EOF && !is_shader_type(peek(p))) {
+    while (peek(p) != TOK_EOF && !is_shader_type(peek(p))
+           && !parser_too_many_errors(p)) {
         /* Must be: return_type function_name(...) { ... } */
         int line = peek_line(p);
 

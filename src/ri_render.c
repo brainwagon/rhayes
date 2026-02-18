@@ -5,6 +5,7 @@
  */
 
 #include "ri_internal.h"
+#include "xpt.h"
 
 // --- Forward declarations ---
 
@@ -1316,6 +1317,20 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             cam_lights[k].direction = rh_vec3_normalize(cam_lights[k].direction);
         }
 
+        /* Transform context for coordinate space transforms in shaders */
+        RhTransformContext xform_ctx;
+        xform_ctx.world_to_camera = view;
+        xform_ctx.camera_to_world = rh_mat4_inverse(view);
+        xform_ctx.object_to_world = model;
+        xform_ctx.world_to_object = model_inv;
+        xform_ctx.camera_to_screen = proj;
+        xform_ctx.named_systems = ctx->named_coord_sys;
+        xform_ctx.num_named_systems = ctx->num_named_coord_sys;
+        xform_ctx.xres = ctx->xres;
+        xform_ctx.yres = ctx->yres;
+        xform_ctx.near_clip = ctx->near_clip;
+        xform_ctx.far_clip = ctx->far_clip;
+
         RhGridScratch* scratch = ctx->grid_scratch;
         RhVec3* screen_pos = scratch->screen_pos;
         RhVec3* screen_pos_t1 = has_motion ? scratch->screen_pos_t1 : NULL;
@@ -1499,6 +1514,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
 
             shctx.du = filter_width;
             shctx.dv = filter_width;
+            shctx.transform_ctx = &xform_ctx;
 
             if (item->is_matte) {
                 // Matte objects: no shading, black color, fully opaque
@@ -1852,7 +1868,7 @@ void RiWorldEnd(void) {
 
                 rh_shadowmap_write(ctx->display_name, sm);
                 rh_shadowmap_destroy(sm);
-                fprintf(stderr, "Saved shadow map to %s\n", ctx->display_name);
+                xpt_info("ri.render", "Saved shadow map to %s", ctx->display_name);
             }
         }
     } else if (ctx->raster && ctx->raster->image) {

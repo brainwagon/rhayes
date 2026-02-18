@@ -1,5 +1,6 @@
 #include "rh_texture.h"
 #include "stb_image.h"
+#include "xpt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -91,7 +92,7 @@ static int build_mipmaps(RhTexture* tex) {
             (size_t)lw * (size_t)lh * (size_t)tex->channels * sizeof(float));
 
         if (!tex->levels[i].data) {
-            fprintf(stderr, "Error: Could not allocate mipmap level %u\n", i);
+            xpt_error("rh.texture", "Could not allocate mipmap level %u", i);
             return 0;
         }
 
@@ -142,7 +143,7 @@ static float* load_stbi(const char* filename, int* out_w, int* out_h,
 
 RhTexture* rh_texture_load(const char* filename, RhTextureFormat format) {
     if (!filename) {
-        fprintf(stderr, "Error: NULL filename passed to rh_texture_load\n");
+        xpt_error("rh.texture", "NULL filename passed to rh_texture_load");
         return NULL;
     }
 
@@ -207,7 +208,7 @@ RhTexture* rh_texture_load(const char* filename, RhTextureFormat format) {
     }
 
     if (!fdata) {
-        fprintf(stderr, "Error: Could not load texture '%s'\n", filename);
+        xpt_error("rh.texture", "Could not load texture '%s'", filename);
         return NULL;
     }
 
@@ -219,7 +220,7 @@ RhTexture* rh_texture_load(const char* filename, RhTextureFormat format) {
     RhTexture* tex = (RhTexture*)malloc(sizeof(RhTexture));
     if (!tex) {
         free(fdata);
-        fprintf(stderr, "Error: Could not allocate texture structure\n");
+        xpt_error("rh.texture", "Could not allocate texture structure");
         return NULL;
     }
 
@@ -233,7 +234,7 @@ RhTexture* rh_texture_load(const char* filename, RhTextureFormat format) {
     if (!tex->levels) {
         free(fdata);
         free(tex);
-        fprintf(stderr, "Error: Could not allocate mipmap level array\n");
+        xpt_error("rh.texture", "Could not allocate mipmap level array");
         return NULL;
     }
 

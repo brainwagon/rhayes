@@ -378,6 +378,96 @@ static void test_illuminance(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Test: error recovery — lexer error in block                        */
+/* ------------------------------------------------------------------ */
+
+static void test_error_lexer_error_in_block(void) {
+    printf("Test: error recovery — lexer error in block...\n");
+    const char* src = "surface foo() { @ }";
+
+    RhSLParser parser;
+    rh_sl_parse_init(&parser, src);
+    RhSLNode* ast = rh_sl_parse(&parser);
+
+    check("terminates", 1);
+    check("has errors", parser.num_errors > 0);
+    (void)ast;
+    rh_sl_node_free(ast);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test: error recovery — missing semicolon                           */
+/* ------------------------------------------------------------------ */
+
+static void test_error_missing_semicolon(void) {
+    printf("Test: error recovery — missing semicolon...\n");
+    const char* src = "surface foo() { x = 1 y = 2; }";
+
+    RhSLParser parser;
+    rh_sl_parse_init(&parser, src);
+    RhSLNode* ast = rh_sl_parse(&parser);
+
+    check("terminates", 1);
+    check("has errors", parser.num_errors > 0);
+    (void)ast;
+    rh_sl_node_free(ast);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test: error recovery — unexpected closing paren                    */
+/* ------------------------------------------------------------------ */
+
+static void test_error_unexpected_paren(void) {
+    printf("Test: error recovery — unexpected closing paren...\n");
+    const char* src = "surface foo() { ) }";
+
+    RhSLParser parser;
+    rh_sl_parse_init(&parser, src);
+    RhSLNode* ast = rh_sl_parse(&parser);
+
+    check("terminates", 1);
+    check("has errors", parser.num_errors > 0);
+    (void)ast;
+    rh_sl_node_free(ast);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test: error recovery — extra comma in args                         */
+/* ------------------------------------------------------------------ */
+
+static void test_error_extra_comma(void) {
+    printf("Test: error recovery — extra comma in args...\n");
+    const char* src = "surface foo() { float x = color(1, , 3); }";
+
+    RhSLParser parser;
+    rh_sl_parse_init(&parser, src);
+    RhSLNode* ast = rh_sl_parse(&parser);
+
+    check("terminates", 1);
+    check("has errors", parser.num_errors > 0);
+    (void)ast;
+    rh_sl_node_free(ast);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test: error recovery — truncated input (EOF mid-parse)             */
+/* ------------------------------------------------------------------ */
+
+static void test_error_truncated_input(void) {
+    printf("Test: error recovery — truncated input...\n");
+    const char* src = "surface foo(";
+
+    RhSLParser parser;
+    rh_sl_parse_init(&parser, src);
+    RhSLNode* ast = rh_sl_parse(&parser);
+
+    check("terminates", 1);
+    check("has errors", parser.num_errors > 0);
+    (void)ast;
+    rh_sl_node_free(ast);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -391,6 +481,11 @@ int main(void) {
     test_user_function();
     test_expressions();
     test_illuminance();
+    test_error_lexer_error_in_block();
+    test_error_missing_semicolon();
+    test_error_unexpected_paren();
+    test_error_extra_comma();
+    test_error_truncated_input();
 
     printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

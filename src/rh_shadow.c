@@ -8,6 +8,7 @@
  */
 
 #include "rh_shadow.h"
+#include "xpt.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -62,7 +63,7 @@ bool rh_shadowmap_write(const char* filename, const RhShadowMap* sm) {
 
     FILE* f = fopen(filename, "wb");
     if (!f) {
-        fprintf(stderr, "Error: Cannot open shadow map file for writing: %s\n", filename);
+        xpt_error("rh.shadow", "Cannot open shadow map file for writing: %s", filename);
         return false;
     }
 
@@ -99,7 +100,7 @@ RhShadowMap* rh_shadowmap_read(const char* filename) {
 
     FILE* f = fopen(filename, "rb");
     if (!f) {
-        fprintf(stderr, "Error: Cannot open shadow map file for reading: %s\n", filename);
+        xpt_error("rh.shadow", "Cannot open shadow map file for reading: %s", filename);
         return NULL;
     }
 
@@ -114,20 +115,20 @@ RhShadowMap* rh_shadowmap_read(const char* filename) {
         fread(&height, sizeof(int), 1, f) != 1 ||
         fread(&near_clip, sizeof(float), 1, f) != 1 ||
         fread(&far_clip, sizeof(float), 1, f) != 1) {
-        fprintf(stderr, "Error: Failed to read shadow map header: %s\n", filename);
+        xpt_error("rh.shadow", "Failed to read shadow map header: %s", filename);
         fclose(f);
         return NULL;
     }
 
     if (magic != RH_SHADOW_MAGIC) {
-        fprintf(stderr, "Error: Invalid shadow map magic number: %s\n", filename);
+        xpt_error("rh.shadow", "Invalid shadow map magic number: %s", filename);
         fclose(f);
         return NULL;
     }
 
     if (version != RH_SHADOW_VERSION) {
-        fprintf(stderr, "Error: Unsupported shadow map version %u (expected %u): %s\n",
-                version, RH_SHADOW_VERSION, filename);
+        xpt_error("rh.shadow", "Unsupported shadow map version %u (expected %u): %s",
+                  version, RH_SHADOW_VERSION, filename);
         fclose(f);
         return NULL;
     }
@@ -145,7 +146,7 @@ RhShadowMap* rh_shadowmap_read(const char* filename) {
     // Read world-to-light-NDC matrix
     for (int i = 0; i < 4; i++) {
         if (fread(sm->world_to_light_ndc.m[i], sizeof(float), 4, f) != 4) {
-            fprintf(stderr, "Error: Failed to read shadow map NDC matrix: %s\n", filename);
+            xpt_error("rh.shadow", "Failed to read shadow map NDC matrix: %s", filename);
             rh_shadowmap_destroy(sm);
             fclose(f);
             return NULL;
@@ -155,7 +156,7 @@ RhShadowMap* rh_shadowmap_read(const char* filename) {
     // Read world-to-light-camera matrix
     for (int i = 0; i < 4; i++) {
         if (fread(sm->world_to_light_camera.m[i], sizeof(float), 4, f) != 4) {
-            fprintf(stderr, "Error: Failed to read shadow map camera matrix: %s\n", filename);
+            xpt_error("rh.shadow", "Failed to read shadow map camera matrix: %s", filename);
             rh_shadowmap_destroy(sm);
             fclose(f);
             return NULL;
@@ -164,7 +165,7 @@ RhShadowMap* rh_shadowmap_read(const char* filename) {
 
     // Read depth buffer
     if (fread(sm->depths, sizeof(float), width * height, f) != (size_t)(width * height)) {
-        fprintf(stderr, "Error: Failed to read shadow map depths: %s\n", filename);
+        xpt_error("rh.shadow", "Failed to read shadow map depths: %s", filename);
         rh_shadowmap_destroy(sm);
         fclose(f);
         return NULL;
@@ -218,6 +219,13 @@ float rh_shadow_pcf_lookup(
         light_ndc.y < -1.0f || light_ndc.y > 1.0f ||
         light_cam.z < sm->near_clip) {
         // Outside frustum - treat as fully lit (no shadow information available)
+        {
+            static int frustum_reject = 0, frustum_ground = 0;
+            frustum_reject++;
+            if (world_pos.y < -0.3f) frustum_ground++;
+            if (frustum_reject % 50000 == 0)
+                xpt_debug("rh.shadow", "FRUSTUM REJECT: total=%d ground=%d", frustum_reject, frustum_ground);
+        }
         return 0.0f;
     }
 
@@ -228,6 +236,7 @@ float rh_shadow_pcf_lookup(
 
     // Surface depth in light camera space (world units)
     float surface_z = light_cam.z;
+
 
     // Filter size in UV coordinates
     float filter_u = filter_size / (float)sm->width;
@@ -285,5 +294,24 @@ float rh_shadow_pcf_lookup(
 
     // Return shadow factor (proportion of samples in shadow)
     if (actual_samples == 0) return 0.0f;
-    return (float)in_shadow / (float)actual_samples;
+    float result = (float)in_shadow / (float)actual_samples;
+
+    {
+        static int call_count = 0, ground_total = 0, ground_shadowed = 0;
+        static int all_total = 0, all_shadowed = 0;
+        call_count++;
+        all_total++;
+        if (result > 0.01f) all_shadowed++;
+        if (world_pos.y < -0.3f) {
+            ground_total++;
+            if (result > 0.01f) ground_shadowed++;
+        }
+        if (call_count % 50000 == 0) {
+            xpt_debug("rh.shadow", "SHADOW STATS: total=%d shadowed=%d (%.1f%%) ground=%d g_shad=%d (%.1f%%)",
+                      all_total, all_shadowed, 100.0f * all_shadowed / (all_total > 0 ? all_total : 1),
+                      ground_total, ground_shadowed, 100.0f * ground_shadowed / (ground_total > 0 ? ground_total : 1));
+        }
+    }
+
+    return result;
 }

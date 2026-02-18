@@ -1,6 +1,7 @@
 #include "rib_output.h"
 #include "ri_callbacks.h"
 #include "ri.h"
+#include "xpt.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -27,9 +28,12 @@ int main(int argc, char** argv) {
         }
     }
 
+    xpt_init();
+    xpt_set_level("", XPT_LEVEL_WARN);
+
     // Initialize RIB output
     if (rib_output_begin(output_file, 0) != 0) {
-        fprintf(stderr, "Failed to open %s for writing\n", output_file);
+        xpt_fatal("scene2rib", "Failed to open %s for writing", output_file);
         return 1;
     }
 

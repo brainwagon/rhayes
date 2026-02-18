@@ -22,6 +22,9 @@ int rib_parser_parse_file(RibParser* parser, const char* filename);
 // Parse from an already-opened stream
 int rib_parser_parse_stream(RibParser* parser, FILE* stream);
 
+// Enable ReadArchive expansion (inline included files instead of passing through)
+void rib_parser_set_expand_archives(RibParser* parser, int expand);
+
 // Get the last error message (NULL if no error)
 const char* rib_parser_get_error(RibParser* parser);
 

@@ -257,6 +257,13 @@ void RiShutter(RtFloat open, RtFloat close) {
     ctx->shutter_close = close;
 }
 
+void RiClipping(RtFloat nearclip, RtFloat farclip) {
+    RiContextData* ctx = ri_get_ctx();
+    if (!ctx) return;
+    ctx->near_clip = nearclip;
+    ctx->far_clip = farclip;
+}
+
 void RiProjectionV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
     RiContextData* ctx = ri_get_ctx();
     if (!ctx) return;

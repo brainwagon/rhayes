@@ -21,6 +21,7 @@ LIBSL_OBJS = $(OBJ_DIR)/rh_sl_lex.o $(OBJ_DIR)/rh_sl_parse.o \
              $(OBJ_DIR)/rh_sl_vm.o $(OBJ_DIR)/rh_sl_slo.o $(OBJ_DIR)/rh_noise.o
 LIBRIB_OBJS = $(OBJ_DIR)/rib_output.o
 LIBRIBPARSE_OBJS = $(OBJ_DIR)/rib_parse.o
+LIBXPT_OBJS = $(OBJ_DIR)/xpt_impl.o
 
 # Libraries
 LIBRH = $(LIB_DIR)/librh.a
@@ -28,17 +29,19 @@ LIBRI = $(LIB_DIR)/libri.a
 LIBSL = $(LIB_DIR)/libsl.a
 LIBRIB = $(LIB_DIR)/librib.a
 LIBRIBPARSE = $(LIB_DIR)/libribparse.a
+LIBXPT = $(LIB_DIR)/libxpt.a
 
 # Programs
 RENDER = $(BIN_DIR)/render
 CATRIB = $(BIN_DIR)/catrib
 SCENE2RIB = $(BIN_DIR)/scene2rib
 SLC = $(BIN_DIR)/shader
+SLDIS = $(BIN_DIR)/sldis
 
 .PHONY: all clean libs programs test test-clean generate-refs profile shaders
 
 # Default target - build all executables
-all: $(RENDER) $(CATRIB) $(SCENE2RIB) $(SLC)
+all: $(RENDER) $(CATRIB) $(SCENE2RIB) $(SLC) $(SLDIS)
 
 # Build all libraries
 libs: $(LIBRH) $(LIBRI)
@@ -66,20 +69,31 @@ $(LIBRIB): $(LIBRIB_OBJS) | $(LIB_DIR)
 $(LIBRIBPARSE): $(LIBRIBPARSE_OBJS) | $(LIB_DIR)
 	ar rcs $@ $^
 
+# xpt logging library (compiled with -w to suppress third-party warnings)
+$(LIBXPT): $(LIBXPT_OBJS) | $(LIB_DIR)
+	ar rcs $@ $^
+
+$(OBJ_DIR)/xpt_impl.o: $(SRC_DIR)/xpt_impl.c | $(OBJ_DIR)
+	$(CC) -std=c99 -Iinclude -O2 -g -w -c $< -o $@
+
 # Render program (parse RIB and render)
-$(RENDER): $(OBJ_DIR)/render.o $(LIBRIBPARSE) $(LIBRI) $(LIBSL) $(LIBRH) | $(BIN_DIR)
+$(RENDER): $(OBJ_DIR)/render.o $(LIBRIBPARSE) $(LIBRI) $(LIBSL) $(LIBRH) $(LIBXPT) | $(BIN_DIR)
 	$(CC) $^ -o $@ $(LDFLAGS)
 
 # Shader compiler
-$(SLC): $(OBJ_DIR)/rh_slc.o $(LIBSL) $(LIBRH) | $(BIN_DIR)
+$(SLC): $(OBJ_DIR)/rh_slc.o $(LIBSL) $(LIBRH) $(LIBXPT) | $(BIN_DIR)
+	$(CC) $^ -o $@ $(LDFLAGS)
+
+# Shader disassembler
+$(SLDIS): $(OBJ_DIR)/rh_sldis.o $(LIBSL) $(LIBRH) $(LIBXPT) | $(BIN_DIR)
 	$(CC) $^ -o $@ $(LDFLAGS)
 
 # Catrib program (parse RIB and write RIB)
-$(CATRIB): $(OBJ_DIR)/catrib.o $(LIBRIBPARSE) $(LIBRIB) | $(BIN_DIR)
+$(CATRIB): $(OBJ_DIR)/catrib.o $(LIBRIBPARSE) $(LIBRIB) $(LIBXPT) | $(BIN_DIR)
 	$(CC) $^ -o $@ $(LDFLAGS)
 
 # Scene2rib program (output main.c scene as RIB)
-$(SCENE2RIB): $(OBJ_DIR)/main_rib.o $(LIBRIB) | $(BIN_DIR)
+$(SCENE2RIB): $(OBJ_DIR)/main_rib.o $(LIBRIB) $(LIBXPT) | $(BIN_DIR)
 	$(CC) $^ -o $@ $(LDFLAGS)
 
 # Third-party stb files: compile with warnings suppressed

@@ -31,6 +31,14 @@
 #define MAX_LIGHTS 8
 #define MAX_IMPL_ATTRIBUTES 32
 #define MAX_IMPL_ATTR_NAME 64
+#define MAX_NAMED_COORD_SYS 32
+
+// --- Named Coordinate System ---
+
+typedef struct RhNamedCoordSys {
+    char name[64];
+    RhMat4 matrix;  /* Transform from named space to world space */
+} RhNamedCoordSys;
 
 // --- Display Mode ---
 
@@ -471,6 +479,10 @@ typedef struct {
     // Shader search path (colon-separated, with BUILTIN token)
     char shader_searchpath[512];
     char texture_searchpath[512];
+
+    // Named coordinate systems (from CoordinateSystem RIB command)
+    RhNamedCoordSys named_coord_sys[MAX_NAMED_COORD_SYS];
+    int num_named_coord_sys;
 
     // Frame state (RiFrameBegin/End)
     bool frame_active;

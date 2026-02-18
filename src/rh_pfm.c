@@ -1,4 +1,5 @@
 #include "rh_pfm.h"
+#include "xpt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,14 +21,14 @@ static void swap4(void* p) {
 float* rh_pfm_load(const char* filename, int* out_w, int* out_h, int* out_channels) {
     FILE* fp = fopen(filename, "rb");
     if (!fp) {
-        fprintf(stderr, "Error: Could not open PFM file '%s'\n", filename);
+        xpt_error("rh.pfm", "Could not open PFM file '%s'", filename);
         return NULL;
     }
 
     /* Read magic: "PF" = 3-channel RGB, "Pf" = 1-channel grayscale */
     char magic[3];
     if (!fgets(magic, sizeof(magic), fp)) {
-        fprintf(stderr, "Error: Could not read PFM header from '%s'\n", filename);
+        xpt_error("rh.pfm", "Could not read PFM header from '%s'", filename);
         fclose(fp);
         return NULL;
     }
@@ -38,7 +39,7 @@ float* rh_pfm_load(const char* filename, int* out_w, int* out_h, int* out_channe
     } else if (magic[0] == 'P' && magic[1] == 'f') {
         channels = 1;
     } else {
-        fprintf(stderr, "Error: Invalid PFM magic in '%s'\n", filename);
+        xpt_error("rh.pfm", "Invalid PFM magic in '%s'", filename);
         fclose(fp);
         return NULL;
     }
@@ -51,7 +52,7 @@ float* rh_pfm_load(const char* filename, int* out_w, int* out_h, int* out_channe
     /* Read width and height */
     int width, height;
     if (fscanf(fp, "%d %d", &width, &height) != 2 || width <= 0 || height <= 0) {
-        fprintf(stderr, "Error: Invalid PFM dimensions in '%s'\n", filename);
+        xpt_error("rh.pfm", "Invalid PFM dimensions in '%s'", filename);
         fclose(fp);
         return NULL;
     }
@@ -65,7 +66,7 @@ float* rh_pfm_load(const char* filename, int* out_w, int* out_h, int* out_channe
        Positive = big-endian, Negative = little-endian */
     float scale;
     if (fscanf(fp, "%f", &scale) != 1) {
-        fprintf(stderr, "Error: Invalid PFM scale in '%s'\n", filename);
+        xpt_error("rh.pfm", "Invalid PFM scale in '%s'", filename);
         fclose(fp);
         return NULL;
     }
@@ -82,13 +83,13 @@ float* rh_pfm_load(const char* filename, int* out_w, int* out_h, int* out_channe
     size_t nfloats = npixels * (size_t)channels;
     float* raw = (float*)malloc(nfloats * sizeof(float));
     if (!raw) {
-        fprintf(stderr, "Error: Could not allocate PFM data for '%s'\n", filename);
+        xpt_error("rh.pfm", "Could not allocate PFM data for '%s'", filename);
         fclose(fp);
         return NULL;
     }
 
     if (fread(raw, sizeof(float), nfloats, fp) != nfloats) {
-        fprintf(stderr, "Error: Short read of PFM data from '%s'\n", filename);
+        xpt_error("rh.pfm", "Short read of PFM data from '%s'", filename);
         free(raw);
         fclose(fp);
         return NULL;

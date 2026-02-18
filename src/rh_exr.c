@@ -1,4 +1,5 @@
 #include "rh_exr.h"
+#include "xpt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,14 +87,14 @@ typedef struct {
 float* rh_exr_load(const char* filename, int* out_w, int* out_h, int* out_channels) {
     FILE* fp = fopen(filename, "rb");
     if (!fp) {
-        fprintf(stderr, "Error: Could not open EXR file '%s'\n", filename);
+        xpt_error("rh.exr", "Could not open EXR file '%s'", filename);
         return NULL;
     }
 
     /* Check magic number: 0x762F3101 (little-endian) */
     unsigned int magic;
     if (!read_u32_le(fp, &magic) || magic != 0x762F3101u) {
-        fprintf(stderr, "Error: Invalid EXR magic in '%s'\n", filename);
+        xpt_error("rh.exr", "Invalid EXR magic in '%s'", filename);
         fclose(fp);
         return NULL;
     }
@@ -101,14 +102,14 @@ float* rh_exr_load(const char* filename, int* out_w, int* out_h, int* out_channe
     /* Version field */
     unsigned int version;
     if (!read_u32_le(fp, &version)) {
-        fprintf(stderr, "Error: Could not read EXR version in '%s'\n", filename);
+        xpt_error("rh.exr", "Could not read EXR version in '%s'", filename);
         fclose(fp);
         return NULL;
     }
 
     /* Check for tiled flag (bit 9) — we don't support tiled */
     if (version & 0x200) {
-        fprintf(stderr, "Error: Tiled EXR not supported in '%s'\n", filename);
+        xpt_error("rh.exr", "Tiled EXR not supported in '%s'", filename);
         fclose(fp);
         return NULL;
     }
@@ -198,8 +199,8 @@ float* rh_exr_load(const char* filename, int* out_w, int* out_h, int* out_channe
 
     /* Validate parsed data */
     if (compression != 0 && compression != 3) {
-        fprintf(stderr, "Error: Unsupported EXR compression %d in '%s' (only NONE=0, ZIP=3)\n",
-                compression, filename);
+        xpt_error("rh.exr", "Unsupported EXR compression %d in '%s' (only NONE=0, ZIP=3)",
+                  compression, filename);
         fclose(fp);
         return NULL;
     }
@@ -207,7 +208,7 @@ float* rh_exr_load(const char* filename, int* out_w, int* out_h, int* out_channe
     int width = data_x_max - data_x_min + 1;
     int height = data_y_max - data_y_min + 1;
     if (width <= 0 || height <= 0) {
-        fprintf(stderr, "Error: Invalid EXR dimensions %dx%d in '%s'\n", width, height, filename);
+        xpt_error("rh.exr", "Invalid EXR dimensions %dx%d in '%s'", width, height, filename);
         fclose(fp);
         return NULL;
     }
@@ -316,7 +317,7 @@ float* rh_exr_load(const char* filename, int* out_w, int* out_h, int* out_channe
             free(compressed);
 
             if (!raw_data) {
-                fprintf(stderr, "Error: ZIP decompression failed in EXR '%s'\n", filename);
+                xpt_error("rh.exr", "ZIP decompression failed in EXR '%s'", filename);
                 free(offsets);
                 free(output);
                 fclose(fp);

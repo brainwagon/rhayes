@@ -3,6 +3,7 @@
 #include "rh_shadow.h"
 #include "rh_noise.h"
 #include "rh_texture.h"
+#include "xpt.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -835,6 +836,84 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
         case OP_TRANSFORM:
         case OP_NTRANSFORM:
         case OP_VTRANSFORM:
+        case OP_TRANSFORM_INV:
+        case OP_NTRANSFORM_INV:
+        case OP_VTRANSFORM_INV: {
+            RhTransformContext* tc = state->transform_ctx;
+            if (!tc) break;  /* No transform context — leave unchanged */
+            const char* space = (src2 < (uint16_t)program->string_count)
+                                ? program->string_table[src2] : "current";
+            /* Resolve current-to-target matrix */
+            RhMat4 mat = rh_mat4_identity();
+            if (strcmp(space, "camera") == 0 || strcmp(space, "current") == 0
+                || strcmp(space, "shader") == 0) {
+                /* identity — already in camera space */
+            } else if (strcmp(space, "world") == 0) {
+                mat = tc->camera_to_world;
+            } else if (strcmp(space, "object") == 0) {
+                mat = rh_mat4_mul(tc->world_to_object, tc->camera_to_world);
+            } else if (strcmp(space, "screen") == 0) {
+                mat = tc->camera_to_screen;
+            } else if (strcmp(space, "NDC") == 0) {
+                /* screen then remap [-1,1] -> [0,1] */
+                mat = tc->camera_to_screen;
+                /* NDC remap applied after transform below */
+            } else if (strcmp(space, "raster") == 0) {
+                mat = tc->camera_to_screen;
+                /* Raster remap applied after transform below */
+            } else {
+                /* User-named coordinate system */
+                const RhNamedCoordSys* named = (const RhNamedCoordSys*)tc->named_systems;
+                for (int ci = 0; ci < tc->num_named_systems; ci++) {
+                    if (strcmp(named[ci].name, space) == 0) {
+                        /* camera->world->named = inv(named_to_world) * camera_to_world */
+                        RhMat4 inv_named = rh_mat4_inverse(named[ci].matrix);
+                        mat = rh_mat4_mul(inv_named, tc->camera_to_world);
+                        break;
+                    }
+                }
+            }
+            /* For INV opcodes: we want target-to-current = inverse(current-to-target) */
+            bool inverse = (op == OP_TRANSFORM_INV || op == OP_NTRANSFORM_INV
+                            || op == OP_VTRANSFORM_INV);
+            if (inverse) mat = rh_mat4_inverse(mat);
+
+            RhVec3 v_in = {r[src1], r[src1+1], r[src1+2]};
+            RhVec3 v_out;
+            bool is_normal = (op == OP_NTRANSFORM || op == OP_NTRANSFORM_INV);
+            bool is_vector = (op == OP_VTRANSFORM || op == OP_VTRANSFORM_INV);
+            if (is_normal) {
+                /* Normal: transpose(inverse(M)) * n */
+                RhMat4 inv_t = rh_mat4_transpose(rh_mat4_inverse(mat));
+                v_out = rh_mat4_mul_dir(inv_t, v_in);
+            } else if (is_vector) {
+                v_out = rh_mat4_mul_dir(mat, v_in);
+            } else {
+                v_out = rh_mat4_mul_point(mat, v_in);
+            }
+            /* NDC/raster post-processing for point transforms */
+            if (!is_normal && !is_vector && !inverse) {
+                if (strcmp(space, "NDC") == 0) {
+                    if (v_out.z != 0.0f) {
+                        v_out.x /= v_out.z;
+                        v_out.y /= v_out.z;
+                    }
+                    v_out.x = v_out.x * 0.5f + 0.5f;
+                    v_out.y = v_out.y * 0.5f + 0.5f;
+                    v_out.z = v_out.z;  /* keep depth */
+                } else if (strcmp(space, "raster") == 0) {
+                    if (v_out.z != 0.0f) {
+                        v_out.x /= v_out.z;
+                        v_out.y /= v_out.z;
+                    }
+                    v_out.x = (v_out.x * 0.5f + 0.5f) * tc->xres;
+                    v_out.y = (v_out.y * 0.5f + 0.5f) * tc->yres;
+                }
+            }
+            r[dst] = v_out.x; r[dst+1] = v_out.y; r[dst+2] = v_out.z;
+            break;
+        }
+
         case OP_DU:
         case OP_DV:
         case OP_AREA:
@@ -844,7 +923,7 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
 
         case OP_PRINTF:
             if (src1 < (uint16_t)program->string_count) {
-                fprintf(stderr, "[SL] %s\n", program->string_table[src1]);
+                xpt_info("sl.vm", "%s", program->string_table[src1]);
             }
             break;
 
@@ -931,6 +1010,7 @@ void rh_sl_vm_shader_exec(RhShaderContext* ctx, void* params) {
     state.light_list = ctx->light_list;
     state.shader_ctx = ctx;
     state.shader = shader;
+    state.transform_ctx = ctx->transform_ctx;
 
     /* Execute */
     rh_sl_vm_execute(prog, &state);

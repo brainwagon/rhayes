@@ -5,6 +5,19 @@
 #include "rh_image.h"
 #include "ri.h"
 
+// Transform context for coordinate space transforms in shaders
+typedef struct {
+    RhMat4 world_to_camera;     // view_matrix
+    RhMat4 camera_to_world;     // inverse(view_matrix)
+    RhMat4 object_to_world;     // item->transform (model matrix)
+    RhMat4 world_to_object;     // inverse(item->transform)
+    RhMat4 camera_to_screen;    // projection matrix
+    const void* named_systems;  // RhNamedCoordSys* (opaque to avoid circular include)
+    int num_named_systems;
+    int xres, yres;
+    float near_clip, far_clip;
+} RhTransformContext;
+
 // Shader Inputs/Outputs (Surface Global Variables in RSL)
 typedef struct {
     // Inputs (ReadOnly usually)
@@ -41,6 +54,9 @@ typedef struct {
     RhVec3 Ps;            // Surface point being illuminated (input for light shaders)
     RhVec3 L_out;         // Light direction output (from light shader)
     RhColor Cl_out;       // Light color output (from light shader)
+
+    // Coordinate space transforms
+    RhTransformContext* transform_ctx;
 
 } RhShaderContext;
 

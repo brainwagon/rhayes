@@ -1,4 +1,5 @@
 #include "rh_image.h"
+#include "xpt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,7 +70,7 @@ static unsigned char to_byte(float v) {
 void rh_image_save_ppm(const RhImage* img, const char* filename) {
     FILE* fp = fopen(filename, "w");
     if (!fp) {
-        fprintf(stderr, "Error: Could not open file %s for writing.\n", filename);
+        xpt_error("rh.image", "Could not open file %s for writing", filename);
         return;
     }
 
@@ -95,13 +96,13 @@ static float luminance_alpha(RhColor opacity) {
 
 void rh_image_save_png_channels(const RhImage* img, const char* filename, int channels) {
     if (channels != 3 && channels != 4) {
-        fprintf(stderr, "Error: PNG channels must be 3 (RGB) or 4 (RGBA)\n");
+        xpt_error("rh.image", "PNG channels must be 3 (RGB) or 4 (RGBA)");
         return;
     }
 
     unsigned char* data = (unsigned char*)malloc((size_t)img->width * (size_t)img->height * (size_t)channels);
     if (!data) {
-        fprintf(stderr, "Error: Could not allocate memory for PNG output.\n");
+        xpt_error("rh.image", "Could not allocate memory for PNG output");
         return;
     }
 
@@ -138,7 +139,7 @@ void rh_image_save_png_channels(const RhImage* img, const char* filename, int ch
     free(data);
 
     if (!result) {
-        fprintf(stderr, "Error: PNG encoding failed for '%s'\n", filename);
+        xpt_error("rh.image", "PNG encoding failed for '%s'", filename);
     } else {
         printf("Saved image to %s\n", filename);
     }
@@ -184,8 +185,8 @@ void rh_image_save(const RhImage* img, const char* filename, int channels) {
 
     // Warn and downgrade if RGBA requested but format doesn't support it
     if (channels == 4 && !format_supports_alpha) {
-        fprintf(stderr, "Warning: Display mode \"rgba\" requested but output format "
-                "does not support alpha; saving as RGB: %s\n", filename);
+        xpt_warn("rh.image", "Display mode \"rgba\" requested but output format "
+                 "does not support alpha; saving as RGB: %s", filename);
         channels = 3;
     }
 
@@ -207,7 +208,7 @@ void rh_image_save(const RhImage* img, const char* filename, int channels) {
         // RGBA path (only for formats that support it: TGA, BMP)
         data = (unsigned char*)malloc((size_t)img->width * (size_t)img->height * 4);
         if (!data) {
-            fprintf(stderr, "Error: Could not allocate memory for image output.\n");
+            xpt_error("rh.image", "Could not allocate memory for image output");
             return;
         }
         for (int i = 0; i < img->width * img->height; i++) {
@@ -230,7 +231,7 @@ void rh_image_save(const RhImage* img, const char* filename, int channels) {
     } else {
         data = prepare_rgb_data(img);
         if (!data) {
-            fprintf(stderr, "Error: Could not allocate memory for image output.\n");
+            xpt_error("rh.image", "Could not allocate memory for image output");
             return;
         }
     }
@@ -243,7 +244,7 @@ void rh_image_save(const RhImage* img, const char* filename, int channels) {
         result = stbi_write_tga(filename, img->width, img->height, channels, data);
     } else {
         // Unknown extension: fall back to PNG
-        fprintf(stderr, "Warning: Unknown image extension, saving as PNG: %s\n", filename);
+        xpt_warn("rh.image", "Unknown image extension, saving as PNG: %s", filename);
         free(data);
         rh_image_save_png_channels(img, filename, channels);
         return;
@@ -251,7 +252,7 @@ void rh_image_save(const RhImage* img, const char* filename, int channels) {
 
     free(data);
     if (!result) {
-        fprintf(stderr, "Error: Image encoding failed for '%s'\n", filename);
+        xpt_error("rh.image", "Image encoding failed for '%s'", filename);
     } else {
         printf("Saved image to %s\n", filename);
     }

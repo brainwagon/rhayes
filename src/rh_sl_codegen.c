@@ -741,20 +741,77 @@ static int emit_builtin_call(CodegenState* cg, const RhSLNode* node) {
         return dst;
     }
 
-    /* --- transform/ntransform/vtransform(space, val) --- */
+    /* --- transform/ntransform/vtransform(space, val) --- 2-arg form */
     if (nargs == 2 && strcmp(name, "transform") == 0) {
+        int str_idx = 0;
+        const RhSLNode* str_arg = node->u.call.args;
+        if (str_arg && str_arg->node_type == SL_NODE_STRING_LIT)
+            str_idx = add_string(cg, str_arg->u.string_lit.value);
         int dst = alloc_reg(cg, 3);
-        emit(cg, RH_SL_INSTR(OP_TRANSFORM, (uint16_t)dst, (uint16_t)arg_regs[1], 0));
+        emit(cg, RH_SL_INSTR(OP_TRANSFORM, (uint16_t)dst, (uint16_t)arg_regs[1], (uint16_t)str_idx));
         return dst;
     }
     if (nargs == 2 && strcmp(name, "ntransform") == 0) {
+        int str_idx = 0;
+        const RhSLNode* str_arg = node->u.call.args;
+        if (str_arg && str_arg->node_type == SL_NODE_STRING_LIT)
+            str_idx = add_string(cg, str_arg->u.string_lit.value);
         int dst = alloc_reg(cg, 3);
-        emit(cg, RH_SL_INSTR(OP_NTRANSFORM, (uint16_t)dst, (uint16_t)arg_regs[1], 0));
+        emit(cg, RH_SL_INSTR(OP_NTRANSFORM, (uint16_t)dst, (uint16_t)arg_regs[1], (uint16_t)str_idx));
         return dst;
     }
     if (nargs == 2 && strcmp(name, "vtransform") == 0) {
+        int str_idx = 0;
+        const RhSLNode* str_arg = node->u.call.args;
+        if (str_arg && str_arg->node_type == SL_NODE_STRING_LIT)
+            str_idx = add_string(cg, str_arg->u.string_lit.value);
         int dst = alloc_reg(cg, 3);
-        emit(cg, RH_SL_INSTR(OP_VTRANSFORM, (uint16_t)dst, (uint16_t)arg_regs[1], 0));
+        emit(cg, RH_SL_INSTR(OP_VTRANSFORM, (uint16_t)dst, (uint16_t)arg_regs[1], (uint16_t)str_idx));
+        return dst;
+    }
+
+    /* --- transform/ntransform/vtransform("from", "to", val) --- 3-arg form
+     * Decomposes to: INV(tmp, val, "from") then FWD(dst, tmp, "to") */
+    if (nargs == 3 && strcmp(name, "transform") == 0) {
+        int from_idx = 0, to_idx = 0;
+        const RhSLNode* from_arg = node->u.call.args;
+        const RhSLNode* to_arg = from_arg ? from_arg->next : NULL;
+        if (from_arg && from_arg->node_type == SL_NODE_STRING_LIT)
+            from_idx = add_string(cg, from_arg->u.string_lit.value);
+        if (to_arg && to_arg->node_type == SL_NODE_STRING_LIT)
+            to_idx = add_string(cg, to_arg->u.string_lit.value);
+        int tmp = alloc_reg(cg, 3);
+        emit(cg, RH_SL_INSTR(OP_TRANSFORM_INV, (uint16_t)tmp, (uint16_t)arg_regs[2], (uint16_t)from_idx));
+        int dst = alloc_reg(cg, 3);
+        emit(cg, RH_SL_INSTR(OP_TRANSFORM, (uint16_t)dst, (uint16_t)tmp, (uint16_t)to_idx));
+        return dst;
+    }
+    if (nargs == 3 && strcmp(name, "ntransform") == 0) {
+        int from_idx = 0, to_idx = 0;
+        const RhSLNode* from_arg = node->u.call.args;
+        const RhSLNode* to_arg = from_arg ? from_arg->next : NULL;
+        if (from_arg && from_arg->node_type == SL_NODE_STRING_LIT)
+            from_idx = add_string(cg, from_arg->u.string_lit.value);
+        if (to_arg && to_arg->node_type == SL_NODE_STRING_LIT)
+            to_idx = add_string(cg, to_arg->u.string_lit.value);
+        int tmp = alloc_reg(cg, 3);
+        emit(cg, RH_SL_INSTR(OP_NTRANSFORM_INV, (uint16_t)tmp, (uint16_t)arg_regs[2], (uint16_t)from_idx));
+        int dst = alloc_reg(cg, 3);
+        emit(cg, RH_SL_INSTR(OP_NTRANSFORM, (uint16_t)dst, (uint16_t)tmp, (uint16_t)to_idx));
+        return dst;
+    }
+    if (nargs == 3 && strcmp(name, "vtransform") == 0) {
+        int from_idx = 0, to_idx = 0;
+        const RhSLNode* from_arg = node->u.call.args;
+        const RhSLNode* to_arg = from_arg ? from_arg->next : NULL;
+        if (from_arg && from_arg->node_type == SL_NODE_STRING_LIT)
+            from_idx = add_string(cg, from_arg->u.string_lit.value);
+        if (to_arg && to_arg->node_type == SL_NODE_STRING_LIT)
+            to_idx = add_string(cg, to_arg->u.string_lit.value);
+        int tmp = alloc_reg(cg, 3);
+        emit(cg, RH_SL_INSTR(OP_VTRANSFORM_INV, (uint16_t)tmp, (uint16_t)arg_regs[2], (uint16_t)from_idx));
+        int dst = alloc_reg(cg, 3);
+        emit(cg, RH_SL_INSTR(OP_VTRANSFORM, (uint16_t)dst, (uint16_t)tmp, (uint16_t)to_idx));
         return dst;
     }
 

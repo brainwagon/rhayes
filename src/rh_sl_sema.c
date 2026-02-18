@@ -253,8 +253,11 @@ static const BuiltinFunc builtin_functions[] = {
 
     /* Transforms */
     {"transform",  SL_TYPE_POINT,  2, {SL_TYPE_STRING, SL_TYPE_POINT}, 0},
+    {"transform",  SL_TYPE_POINT,  3, {SL_TYPE_STRING, SL_TYPE_STRING, SL_TYPE_POINT}, 0},
     {"ntransform", SL_TYPE_NORMAL, 2, {SL_TYPE_STRING, SL_TYPE_NORMAL}, 0},
+    {"ntransform", SL_TYPE_NORMAL, 3, {SL_TYPE_STRING, SL_TYPE_STRING, SL_TYPE_NORMAL}, 0},
     {"vtransform", SL_TYPE_VECTOR, 2, {SL_TYPE_STRING, SL_TYPE_VECTOR}, 0},
+    {"vtransform", SL_TYPE_VECTOR, 3, {SL_TYPE_STRING, SL_TYPE_STRING, SL_TYPE_VECTOR}, 0},
 
     /* Misc */
     {"printf", SL_TYPE_VOID, 1, {SL_TYPE_STRING}, 1}, /* variadic */
