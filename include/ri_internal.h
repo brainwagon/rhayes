@@ -90,6 +90,8 @@ typedef struct {
     RhShaderFunc current_atmosphere_shader;
     void* current_atmosphere_params;
     float shading_rate;  // Controls splitting granularity (default 1.0)
+    float displace_bound;         /* sphere radius in displace_coordsys (default 0) */
+    char  displace_coordsys[64];  /* coordinate system name (default "object") */
 
     // Orientation and sides
     bool orientation_lh;         // false = right-handed (default), true = left-handed
@@ -127,6 +129,8 @@ typedef struct {
     RhShaderFunc atmosphere_shader;
     void* atmosphere_params;
     float shading_rate;  // Captured from attribute state
+    float displace_bound;
+    char  displace_coordsys[64];
     bool processed;      // Has this primitive been split/diced/shaded?
     int last_bucket_idx; // Linear index of last bucket containing this item
     int all_items_idx;   // Index in g_ctx->all_items for cleanup
@@ -263,6 +267,10 @@ typedef struct {
     RhVec3 cam_positions[MAX_GRID_SIZE * MAX_GRID_SIZE];
     RhVec3 cam_normals[MAX_GRID_SIZE * MAX_GRID_SIZE];
     RhVec3 world_positions[MAX_GRID_SIZE * MAX_GRID_SIZE];
+    /* Fully-displaced positions from displacement pre-pass (see ri_render.c).
+     * Used by OP_CALCNORMAL so all neighbours are displaced before normal
+     * computation, eliminating grid-boundary normal discontinuities. */
+    RhVec3 predisplace_positions[MAX_GRID_SIZE * MAX_GRID_SIZE];
 } RhGridScratch;
 
 // --- Object (Retained Geometry) ---
@@ -545,6 +553,25 @@ typedef bool (*RiSearchPathCallback)(bool is_builtin, const char* dir, void* use
 void ri_iterate_searchpath(RiSearchPathCallback cb, void* user);
 
 // --- Utility Functions ---
+
+/* Convert displacement sphere radius from named coordsys to object space.
+ * "object" returns d directly. Other spaces: divide by min column-scale of
+ * obj_to_world (conservative over-estimate for non-uniform scale). */
+static inline float ri_displace_bound_in_obj(float d, const char* coordsys,
+                                              const RhMat4* obj_to_world) {
+    if (strcmp(coordsys, "object") == 0) return d;
+    float s0 = sqrtf(obj_to_world->m[0][0]*obj_to_world->m[0][0] +
+                     obj_to_world->m[1][0]*obj_to_world->m[1][0] +
+                     obj_to_world->m[2][0]*obj_to_world->m[2][0]);
+    float s1 = sqrtf(obj_to_world->m[0][1]*obj_to_world->m[0][1] +
+                     obj_to_world->m[1][1]*obj_to_world->m[1][1] +
+                     obj_to_world->m[2][1]*obj_to_world->m[2][1]);
+    float s2 = sqrtf(obj_to_world->m[0][2]*obj_to_world->m[0][2] +
+                     obj_to_world->m[1][2]*obj_to_world->m[1][2] +
+                     obj_to_world->m[2][2]*obj_to_world->m[2][2]);
+    float ms = s0; if (s1 < ms) ms = s1; if (s2 < ms) ms = s2;
+    return d / (ms > 1e-6f ? ms : 1.0f);
+}
 
 // Check if two matrices are approximately equal (used in ri_state.c)
 static inline bool rh_mat4_equal(RhMat4 a, RhMat4 b) {

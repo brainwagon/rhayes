@@ -125,6 +125,8 @@ RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* transfor
     item->atmosphere_shader = ri_curr()->current_atmosphere_shader;
     item->atmosphere_params = ri_curr()->current_atmosphere_params;
     item->shading_rate = ri_curr()->shading_rate;
+    item->displace_bound = ri_curr()->displace_bound;
+    memcpy(item->displace_coordsys, ri_curr()->displace_coordsys, 64);
 
     // Compute effective orientation flip
     bool flipped = ri_curr()->orientation_lh ^ ((ri_curr()->reverse_orientation & 1) != 0);
@@ -1182,6 +1184,30 @@ static void ri_sample_mpoly(
     }
 }
 
+// Project 8 corners of an object-space bounding box through MVP and return screen-pixel area.
+static float ri_screen_area_from_bounds(const RhBounds3* b, const RhMat4* mvp) {
+    RiContextData* ctx = ri_get_ctx();
+    float min_x = 1e30f, max_x = -1e30f, min_y = 1e30f, max_y = -1e30f;
+    float cx[8] = {b->min.x, b->max.x, b->min.x, b->max.x,
+                   b->min.x, b->max.x, b->min.x, b->max.x};
+    float cy[8] = {b->min.y, b->min.y, b->max.y, b->max.y,
+                   b->min.y, b->min.y, b->max.y, b->max.y};
+    float cz[8] = {b->min.z, b->min.z, b->min.z, b->min.z,
+                   b->max.z, b->max.z, b->max.z, b->max.z};
+    for (int k = 0; k < 8; k++) {
+        RhVec3 ndc = rh_mat4_mul_point(*mvp,
+                         rh_vec3_create(cx[k], cy[k], cz[k]));
+        float rx = (ndc.x + 1.0f) * 0.5f * (float)ctx->xres;
+        float ry = (1.0f - (ndc.y + 1.0f) * 0.5f) * (float)ctx->yres;
+        if (rx < min_x) min_x = rx;
+        if (rx > max_x) max_x = rx;
+        if (ry < min_y) min_y = ry;
+        if (ry > max_y) max_y = ry;
+    }
+    float w = max_x - min_x, h = max_y - min_y;
+    return (w > 0.0f ? w : 0.0f) * (h > 0.0f ? h : 0.0f);
+}
+
 // Compute screen-space bounding box area for a primitive
 static float ri_compute_screen_area_motion(const RhPrimitive* p, const RhMat4* mvp, const RhMat4* mvp_t1) {
     RiContextData* ctx = ri_get_ctx();
@@ -1261,6 +1287,17 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
                   rh_mat4_mul(ctx->view_matrix, item->transform));
 
     float screen_area = ri_compute_screen_area(p, &mvp);
+
+    if (item->displace_bound > 0.0f) {
+        float db = ri_displace_bound_in_obj(item->displace_bound,
+                                            item->displace_coordsys,
+                                            &item->transform);
+        RhBounds3 bounds = rh_prim_bound(p);
+        bounds.min.x -= db; bounds.min.y -= db; bounds.min.z -= db;
+        bounds.max.x += db; bounds.max.y += db; bounds.max.z += db;
+        float ea = ri_screen_area_from_bounds(&bounds, &mvp);
+        if (ea > screen_area) screen_area = ea;
+    }
 
     float shading_rate_sq = item->shading_rate * item->shading_rate;
     float area_threshold = MAX_GRID_AREA * shading_rate_sq;
@@ -1434,6 +1471,54 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
 
         ctx->stats.grids_shaded++;
 
+        /* ---- Displacement pre-pass ----------------------------------------
+         * When a displacement shader is active, run it once over all vertices
+         * (with lighting disabled) purely to collect the fully-displaced
+         * positions into scratch->predisplace_positions.  OP_CALCNORMAL in the
+         * subsequent main shading pass then sees a complete displaced grid and
+         * can use central differences everywhere, which eliminates the normal
+         * discontinuities that occurred at gx=0 / gy=0 when forward neighbours
+         * were still at their original (undisplaced) positions.
+         * ------------------------------------------------------------------ */
+        RhVec3* displaced_grid_buf = cam_positions;   /* default: no displacement */
+        if (item->displace_bound > 0.0f && item->shader) {
+            RhVec3* pre = scratch->predisplace_positions;
+            /* Seed with original positions so forward-neighbour lookups in the
+             * pre-pass itself have something geometrically meaningful. */
+            for (int j = 0; j < gridSize * gridSize; j++)
+                pre[j] = cam_positions[j];
+            for (int j = 0; j < gridSize * gridSize; j++) {
+                RhShaderContext prectx;
+                prectx.P                  = cam_positions[j];
+                prectx.P_world            = world_positions[j];
+                prectx.N                  = cam_normals[j];
+                prectx.I                  = cam_positions[j];
+                prectx.Cs                 = cur_col;
+                prectx.Os                 = item->opacity;
+                prectx.light_list         = NULL;  /* skip lighting in pre-pass */
+                prectx.num_lights         = 0;
+                prectx.grid_ptr           = (void*)(intptr_t)(ctx->grid_counter);
+                prectx.vertex_index       = j;
+                prectx.displaced_grid     = pre;
+                prectx.displaced_grid_size = gridSize;
+                prectx.primvars           = item->prim.primvars;
+                prectx.num_primvars       = item->prim.num_primvars;
+                prectx.u                  = grid->s_coords[j];
+                prectx.v                  = grid->t_coords[j];
+                prectx.du                 = 0.0f;
+                prectx.dv                 = 0.0f;
+                prectx.transform_ctx      = &xform_ctx;
+                prectx.Ps                 = rh_vec3_create(0.0f, 0.0f, 0.0f);
+                prectx.L_out              = rh_vec3_create(0.0f, 0.0f, 0.0f);
+                prectx.Cl_out             = (RhColor){0.0f, 0.0f, 0.0f};
+                prectx.Ci                 = (RhColor){0.0f, 0.0f, 0.0f};
+                prectx.Oi                 = (RhColor){0.0f, 0.0f, 0.0f};
+                item->shader(&prectx, item->shader_params);
+                pre[j] = prectx.P;   /* capture displaced position only */
+            }
+            displaced_grid_buf = pre;
+        }
+
         for (int i = 0; i < gridSize * gridSize; i++) {
             int gx = i % gridSize;
             int gy = i / gridSize;
@@ -1504,6 +1589,8 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
             shctx.num_lights = ctx->num_lights;
             shctx.grid_ptr = (void*)(intptr_t)(ctx->grid_counter);
             shctx.vertex_index = i;
+            shctx.displaced_grid = displaced_grid_buf;   /* pre-displaced or cam_positions */
+            shctx.displaced_grid_size = gridSize;
 
             shctx.primvars = item->prim.primvars;
             shctx.num_primvars = item->prim.num_primvars;
@@ -1536,6 +1623,21 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
 
             grid->colors[i] = shctx.Ci;
             grid->opacities[i] = shctx.Oi;
+            cam_positions[i] = shctx.P;   /* update cam_positions for re-projection below */
+        }
+
+        /* Re-project cam_positions when displacement is active */
+        if (item->displace_bound > 0.0f) {
+            for (int i = 0; i < gridSize * gridSize; i++) {
+                if (cam_positions[i].z < ctx->near_clip) {
+                    screen_pos[i] = rh_vec3_create(-1e9f, -1e9f, 1e30f);
+                } else {
+                    RhVec3 ndc = rh_mat4_mul_point(proj, cam_positions[i]);
+                    float rx = (ndc.x + 1.0f) * 0.5f * ctx->ss_xres;
+                    float ry = (1.0f - (ndc.y + 1.0f) * 0.5f) * ctx->ss_yres;
+                    screen_pos[i] = rh_vec3_create(rx, ry, cam_positions[i].z);
+                }
+            }
         }
 
         ri_grid_to_mpolys_motion(grid, screen_pos, screen_pos_t1, cam_normals, has_motion,

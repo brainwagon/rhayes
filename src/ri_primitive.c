@@ -549,6 +549,13 @@ static void ri_add_to_buckets(const RhPrimitive* p, const RhMat4* transform, con
 
     // Calculate Screen Bounds
     RhBounds3 obj_bounds = rh_prim_bound(p);
+    if (item->displace_bound > 0.0f) {
+        float db = ri_displace_bound_in_obj(item->displace_bound,
+                                            item->displace_coordsys,
+                                            &item->transform);
+        obj_bounds.min.x -= db; obj_bounds.min.y -= db; obj_bounds.min.z -= db;
+        obj_bounds.max.x += db; obj_bounds.max.y += db; obj_bounds.max.z += db;
+    }
     RhMat4 mvp = rh_mat4_mul(ctx->projection, rh_mat4_mul(ctx->view_matrix, item->transform));
 
     RhVec3 corners[8];

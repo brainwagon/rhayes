@@ -917,9 +917,85 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
         case OP_DU:
         case OP_DV:
         case OP_AREA:
-        case OP_CALCNORMAL:
             /* Stub: leave dst unchanged */
             break;
+
+        case OP_CALCNORMAL: {
+            /* Compute surface normal from the pre-displaced grid via finite
+             * differences.  src1 = register holding displaced P (3 floats).
+             *
+             * ctx->displaced_grid is filled by a displacement pre-pass in
+             * ri_render.c before the main shading loop, so every neighbour
+             * already holds its final displaced position.  This lets us use
+             * central differences for interior vertices and clean one-sided
+             * differences at grid edges — with no mixing of displaced and
+             * undisplaced positions. */
+            RhShaderContext* ctx = state->shader_ctx;
+            float Px = r[src1+0], Py = r[src1+1], Pz = r[src1+2];
+            float nx = 0.0f, ny = 0.0f, nz = 1.0f; /* safe fallback */
+
+            if (ctx && ctx->displaced_grid && ctx->displaced_grid_size > 0) {
+                int gs  = ctx->displaced_grid_size;
+                int idx = ctx->vertex_index;
+                int gx  = idx % gs;
+                int gy  = idx / gs;
+                RhVec3* grid = ctx->displaced_grid;
+
+                float dux, duy, duz;
+                if (gx > 0 && gx < gs - 1) {
+                    /* Central differences: both neighbours pre-displaced */
+                    dux = (grid[idx + 1].x - grid[idx - 1].x) * 0.5f;
+                    duy = (grid[idx + 1].y - grid[idx - 1].y) * 0.5f;
+                    duz = (grid[idx + 1].z - grid[idx - 1].z) * 0.5f;
+                } else if (gx > 0) {
+                    /* Right edge: backward one-sided difference */
+                    dux = Px - grid[idx - 1].x;
+                    duy = Py - grid[idx - 1].y;
+                    duz = Pz - grid[idx - 1].z;
+                } else if (gx < gs - 1) {
+                    /* Left edge: forward one-sided difference (neighbour pre-displaced) */
+                    dux = grid[idx + 1].x - Px;
+                    duy = grid[idx + 1].y - Py;
+                    duz = grid[idx + 1].z - Pz;
+                } else {
+                    dux = 1.0f; duy = 0.0f; duz = 0.0f;
+                }
+
+                float dvx, dvy, dvz;
+                if (gy > 0 && gy < gs - 1) {
+                    /* Central differences: both neighbours pre-displaced */
+                    dvx = (grid[idx + gs].x - grid[idx - gs].x) * 0.5f;
+                    dvy = (grid[idx + gs].y - grid[idx - gs].y) * 0.5f;
+                    dvz = (grid[idx + gs].z - grid[idx - gs].z) * 0.5f;
+                } else if (gy > 0) {
+                    /* Bottom edge: backward one-sided difference */
+                    dvx = Px - grid[idx - gs].x;
+                    dvy = Py - grid[idx - gs].y;
+                    dvz = Pz - grid[idx - gs].z;
+                } else if (gy < gs - 1) {
+                    /* Top edge: forward one-sided difference (neighbour pre-displaced) */
+                    dvx = grid[idx + gs].x - Px;
+                    dvy = grid[idx + gs].y - Py;
+                    dvz = grid[idx + gs].z - Pz;
+                } else {
+                    dvx = 0.0f; dvy = 1.0f; dvz = 0.0f;
+                }
+
+                /* cross(du, dv) */
+                nx = duy * dvz - duz * dvy;
+                ny = duz * dvx - dux * dvz;
+                nz = dux * dvy - duy * dvx;
+                float len = sqrtf(nx*nx + ny*ny + nz*nz);
+                if (len > 1e-10f) { nx /= len; ny /= len; nz /= len; }
+
+                /* Orient toward the same side as the pre-displacement normal */
+                float dot = nx * r[R_N+0] + ny * r[R_N+1] + nz * r[R_N+2];
+                if (dot < 0.0f) { nx = -nx; ny = -ny; nz = -nz; }
+            }
+
+            r[dst+0] = nx; r[dst+1] = ny; r[dst+2] = nz;
+            break;
+        }
 
         case OP_PRINTF:
             if (src1 < (uint16_t)program->string_count) {
@@ -1019,11 +1095,9 @@ void rh_sl_vm_shader_exec(RhShaderContext* ctx, void* params) {
     ctx->Ci.r = regs[R_CI+0]; ctx->Ci.g = regs[R_CI+1]; ctx->Ci.b = regs[R_CI+2];
     ctx->Oi.r = regs[R_OI+0]; ctx->Oi.g = regs[R_OI+1]; ctx->Oi.b = regs[R_OI+2];
 
-    /* For displacement shaders, also write back P and N */
-    if (prog->shader_type == RH_SL_SHADER_DISPLACEMENT) {
-        ctx->P.x = regs[R_P+0]; ctx->P.y = regs[R_P+1]; ctx->P.z = regs[R_P+2];
-        ctx->N.x = regs[R_N+0]; ctx->N.y = regs[R_N+1]; ctx->N.z = regs[R_N+2];
-    }
+    /* Always write back P and N so surface shaders can displace geometry */
+    ctx->P.x = regs[R_P+0]; ctx->P.y = regs[R_P+1]; ctx->P.z = regs[R_P+2];
+    ctx->N.x = regs[R_N+0]; ctx->N.y = regs[R_N+1]; ctx->N.z = regs[R_N+2];
 
     /* For light shaders, write back L and Cl */
     if (prog->shader_type == RH_SL_SHADER_LIGHT) {

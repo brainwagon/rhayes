@@ -61,7 +61,6 @@ RenderMan API calls → Graphics State Stack → Scene Collection (WorldBegin/En
 - **Light struct synchronization**: `RhLight_ShaderView` in `rh_shader.c` must exactly match `RhLight` in `ri.c` (including the `transform` field) or array indexing will be corrupted
 - **Polygon normals**: Computed via finite differences; vertex winding order affects normal direction
 - **Sphere pole normals**: Finite difference method degenerates at poles; fallback to analytic normal `N = normalize(P)`
-- **Hi-Z occlusion culling**: Currently disabled due to incorrect culling of adjacent polygons at similar depths. The infrastructure exists (A-buffer tracks `opaque_z` per subpixel list) but Hi-Z updates are not performed during bucket processing. See `docs/HIZ_CULLING_NOTES.md` for detailed analysis and potential future solutions.
 
 ## Coordinate System
 

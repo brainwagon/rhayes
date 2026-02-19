@@ -58,6 +58,11 @@ typedef struct {
     // Coordinate space transforms
     RhTransformContext* transform_ctx;
 
+    // Grid position array for calculatenormal() — points at cam_positions,
+    // updated vertex-by-vertex as displacement is applied.
+    RhVec3* displaced_grid;
+    int displaced_grid_size;   /* N for an N×N grid */
+
 } RhShaderContext;
 
 // Primvar lookup helper for shaders

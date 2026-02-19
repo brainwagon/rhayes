@@ -65,6 +65,8 @@ void RiBegin(RtToken name) {
     g_ctx->stack[0].current_atmosphere_shader = NULL;
     g_ctx->stack[0].current_atmosphere_params = NULL;
     g_ctx->stack[0].shading_rate = 1.0f; // Default ShadingRate
+    g_ctx->stack[0].displace_bound = 0.0f;
+    memcpy(g_ctx->stack[0].displace_coordsys, "object", 7);
 
     // Default Orientation and Sides
     g_ctx->stack[0].orientation_lh = true;        // Left-handed by default (RenderMan convention)

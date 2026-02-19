@@ -368,6 +368,19 @@ void RiAttributeV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
     for (int i = 0; i < count; i++) {
         if (!tokens[i] || !values[i]) continue;
 
+        if (strcmp(name, "displacementbound") == 0) {
+            if (strcmp(tokens[i], "sphere") == 0) {
+                ri_curr()->displace_bound = *(float*)values[i];
+            } else if (strcmp(tokens[i], "coordinatesystem") == 0) {
+                const char* s = *(const char**)values[i];
+                if (s) {
+                    memcpy(ri_curr()->displace_coordsys, s, 63);
+                    ri_curr()->displace_coordsys[63] = '\0';
+                }
+            }
+            continue;  /* skip generic impl_attrs storage */
+        }
+
         RhImplAttribute* attr = ri_find_or_create_attr(name, tokens[i]);
         if (!attr) continue;
 
