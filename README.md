@@ -94,11 +94,20 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
     - Bicubic Patches and custom "teapot" geometry.
     - Polygons and Polyline support.
 - **Basis Matrices**: Support for `RiBasis` (Bezier, B-Spline, Catmull-Rom, etc.).
+- **RSL Shading Language Compiler & VM**:
+    - Full RSL (RenderMan Shading Language) compiler: lexer, parser, semantic analyzer, bytecode code generator, and register-based VM.
+    - Compiler driver (`bin/shader`) compiles `.sl` source to `.slo` bytecode; disassembler (`bin/sldis`) prints human-readable bytecode.
+    - Configurable shader search path (`RiOption "searchpath" "shader" "..."`) with `BUILTIN` sentinel for built-in C shaders.
+    - Standard shader library in RSL (`shaders/*.sl`): `matte`, `plastic`, `metal`, `shinymetal`, `constant`, `paintedplastic`, `ambientlight`, `pointlight`, `distantlight`, `spotlight`.
+    - Displacement shaders: procedural displacement via `calculatenormal()` for correct shading normals.
+    - Light shaders in RSL with `illuminate` / `solar` statement support.
+    - Perlin noise builtins: `noise`, `pnoise`, `cellnoise` (1D, 2D, 3D).
+    - Transform builtins: `transform`, `ntransform`, `vtransform` for named coordinate spaces.
 - **Shading & Lighting**:
-    - Surface shaders: `matte`, `plastic`, `metal`, `paintedplastic` (textured), and diagnostic shaders (`random`, `randomgrid`).
+    - Surface shaders: `matte`, `plastic`, `metal`, `shinymetal`, `paintedplastic` (textured), `constant`, and diagnostic shaders (`random`, `randomgrid`).
     - Atmosphere shaders: `depthcue` (linear depth fade) and `fog` (exponential extinction) via `RiAtmosphere`.
     - Hold-out mattes via `RiMatte`: matte objects occlude geometry behind them but are themselves transparent in the final image (alpha=0), useful for compositing.
-    - Light sources: Point, Distant, Ambient, and Spotlight.
+    - Light sources: Point, Distant, Ambient, and Spotlight (all with RSL implementations).
 - **Shadow Mapping**:
     - Depth-based shadow maps with Percentage Closer Filtering (PCF).
     - Configurable shadow samples, bias, and blur for soft shadow edges.
@@ -128,6 +137,10 @@ The renderer implements a classic REYES pipeline: recursive splitting of primiti
     - Screen-space texture derivatives for proper filtering at all orientations.
     - Correct handling of parametric singularities (e.g., sphere poles).
     - Support for grayscale, RGB, and RGBA textures.
+    - RSL `texture()` builtin with full RSL filter-width control:
+        - Basic form: `texture("name", s, t)` — uses screen-space derivatives.
+        - Named params: `texture("name", s, t, "blur", b, "width", w, ...)` — `blur`, `sblur`, `tblur`, `width`, `swidth`, `twidth`.
+        - 4-point quad form: `texture("name", s0,t0, s1,t1, s2,t2, s3,t3)` — filter width derived from quad extent.
 - **RIB Support**:
     - RIB parser for scene description with motion blur support.
     - RIB output for scene serialization (`scene2rib` utility).
@@ -149,8 +162,9 @@ make test
 ```
 
 This builds:
-- `rhayes` - Demo executable with built-in test scene
 - `bin/render` - RIB file renderer
+- `bin/shader` - RSL shader compiler (`.sl` → `.slo`)
+- `bin/sldis` - RSL bytecode disassembler
 - `bin/catrib` - RIB parser/serializer utility
 - `bin/scene2rib` - C API to RIB converter
 
@@ -167,6 +181,18 @@ This generates `output.png`.
 Render any RIB (RenderMan Interface Bytestream) file:
 ```sh
 ./bin/render scene.rib
+```
+
+### Shader Compiler
+
+Compile an RSL shader source file to bytecode:
+```sh
+./bin/shader matte.sl -o matte.slo
+```
+
+Disassemble compiled bytecode:
+```sh
+./bin/sldis matte.slo
 ```
 
 ### RIB Utilities
@@ -189,8 +215,9 @@ make test
 ```
 
 ## Project Structure
-- `src/`: Core implementation of the REYES pipeline and utilities.
+- `src/`: Core implementation of the REYES pipeline, RSL compiler, and utilities.
 - `include/`: API headers and internal configuration.
+- `shaders/`: RSL standard shader library source (`.sl`) and compiled bytecode (`.slo`).
 - `tests/`: RIB test files, reference images, and test runner.
 - `textures/`: Sample textures for testing.
 - `bin/`: Compiled executables.
@@ -278,9 +305,7 @@ Motion blur with jittered sampling remains computationally expensive for fast-mo
 Current development focus:
 - **A-Buffer Integration**: Infrastructure for per-subpixel sample lists is implemented (RhSample, RhSubpixelList, RhBucketSamples). Pending: integration into rasterization pipeline for proper transparency compositing and visibility culling.
 - **Two-Sided Primitives**: Add "Sides" attribute to control one-sided vs two-sided surface rendering. Required for correct backface culling.
-- **Additional Shaders**: Extend texture support to `shinymetal` and other shaders.
 - **Trilinear Filtering**: Add interpolation between mip levels for smoother LOD transitions.
-- **Displacement Mapping**: Support for procedural and texture-based surface displacement.
 - **Deformation Motion Blur**: Extend motion blur to support deforming geometry (not just transforms).
 - **Depth of Field**: Implement lens sampling for depth of field effects.
 
