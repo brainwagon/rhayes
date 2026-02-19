@@ -2020,6 +2020,231 @@ static void test_tuple_type_coerce(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Texture test helpers                                               */
+/* ------------------------------------------------------------------ */
+
+static RhTexture* make_synthetic_texture(float r, float g, float b) {
+    float* pixel = malloc(3 * sizeof(float));
+    pixel[0] = r; pixel[1] = g; pixel[2] = b;
+    RhMipLevel* mip = malloc(sizeof(RhMipLevel));
+    mip->width = 1; mip->height = 1; mip->data = pixel;
+    RhTexture* tex = calloc(1, sizeof(RhTexture));
+    tex->base_width = 1; tex->base_height = 1;
+    tex->channels = 3; tex->num_levels = 1;
+    tex->levels = mip;
+    return tex;
+}
+
+static int find_str_idx(const RhSLProgram* prog, const char* name) {
+    for (int i = 0; i < prog->string_count; i++) {
+        if (strcmp(prog->string_table[i], name) == 0) return i;
+    }
+    return -1;
+}
+
+static void inject_texture(RhSLShader* shader, const RhSLProgram* prog,
+                           int str_idx, RhTexture* tex) {
+    if (!shader->textures) {
+        shader->num_textures = prog->string_count;
+        shader->textures = calloc((size_t)prog->string_count, sizeof(void*));
+    }
+    if (str_idx >= 0 && str_idx < shader->num_textures)
+        shader->textures[str_idx] = tex;
+}
+
+static int find_texture_flags(const RhSLProgram* prog) {
+    for (int i = 0; i < prog->code_len; i++) {
+        if (RH_SL_DECODE_OP(prog->code[i]) == OP_TEXTURE)
+            return (int)RH_SL_DECODE_FLAGS(prog->code[i]);
+    }
+    return -1;
+}
+
+/* Helper: check (bool), increment counters */
+static void check_bool(const char* test, const char* desc, int cond) {
+    tests_run++;
+    if (cond) {
+        tests_passed++;
+    } else {
+        tests_failed++;
+        printf("  FAIL [%s] %s\n", test, desc);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test: texture basic (flags=0)                                      */
+/* ------------------------------------------------------------------ */
+
+static void test_texture_basic(void) {
+    const char* src =
+        "surface textest() {\n"
+        "    Ci = texture(\"t.tex\", s, t);\n"
+        "    Oi = Os;\n"
+        "}";
+    RhSLProgram* prog = compile_shader(src);
+    if (!prog) {
+        tests_run++; tests_failed++;
+        printf("  FAIL [texture_basic] compilation failed\n");
+        return;
+    }
+    check_bool("texture_basic", "flags==0", find_texture_flags(prog) == 0);
+
+    int str_idx = find_str_idx(prog, "t.tex");
+    RhTexture* tex = make_synthetic_texture(0.5f, 0.3f, 0.8f);
+    RhSLShader* shader = rh_sl_shader_create(prog);
+    inject_texture(shader, prog, str_idx, tex);
+
+    RhShaderContext ctx;
+    init_ctx(&ctx);
+    ctx.u = 0.5f; ctx.v = 0.5f;
+    rh_sl_vm_shader_exec(&ctx, shader);
+
+    check_color("texture_basic", "Ci", ctx.Ci, (RhColor){0.5f, 0.3f, 0.8f}, TOL);
+
+    /* tex will be freed by rh_sl_shader_free via rh_texture_destroy */
+    rh_sl_shader_free(shader);
+    rh_sl_program_free(prog);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test: texture with blur param (flags=1)                            */
+/* ------------------------------------------------------------------ */
+
+static void test_texture_blur(void) {
+    const char* src =
+        "surface texblur() {\n"
+        "    Ci = texture(\"t.tex\", s, t, \"blur\", 0.5);\n"
+        "    Oi = Os;\n"
+        "}";
+    RhSLProgram* prog = compile_shader(src);
+    if (!prog) {
+        tests_run++; tests_failed++;
+        printf("  FAIL [texture_blur] compilation failed\n");
+        return;
+    }
+    check_bool("texture_blur", "flags==1", find_texture_flags(prog) == 1);
+
+    int str_idx = find_str_idx(prog, "t.tex");
+    RhTexture* tex = make_synthetic_texture(0.2f, 0.4f, 0.6f);
+    RhSLShader* shader = rh_sl_shader_create(prog);
+    inject_texture(shader, prog, str_idx, tex);
+
+    RhShaderContext ctx;
+    init_ctx(&ctx);
+    rh_sl_vm_shader_exec(&ctx, shader);
+
+    check_color("texture_blur", "Ci", ctx.Ci, (RhColor){0.2f, 0.4f, 0.6f}, TOL);
+
+    rh_sl_shader_free(shader);
+    rh_sl_program_free(prog);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test: texture with width param (flags=1)                           */
+/* ------------------------------------------------------------------ */
+
+static void test_texture_width(void) {
+    const char* src =
+        "surface texwidth() {\n"
+        "    Ci = texture(\"t.tex\", s, t, \"width\", 2.0);\n"
+        "    Oi = Os;\n"
+        "}";
+    RhSLProgram* prog = compile_shader(src);
+    if (!prog) {
+        tests_run++; tests_failed++;
+        printf("  FAIL [texture_width] compilation failed\n");
+        return;
+    }
+    check_bool("texture_width", "flags==1", find_texture_flags(prog) == 1);
+
+    int str_idx = find_str_idx(prog, "t.tex");
+    RhTexture* tex = make_synthetic_texture(0.7f, 0.1f, 0.3f);
+    RhSLShader* shader = rh_sl_shader_create(prog);
+    inject_texture(shader, prog, str_idx, tex);
+
+    RhShaderContext ctx;
+    init_ctx(&ctx);
+    rh_sl_vm_shader_exec(&ctx, shader);
+
+    check_color("texture_width", "Ci", ctx.Ci, (RhColor){0.7f, 0.1f, 0.3f}, TOL);
+
+    rh_sl_shader_free(shader);
+    rh_sl_program_free(prog);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test: texture with sblur/tblur params (flags=1)                   */
+/* ------------------------------------------------------------------ */
+
+static void test_texture_sblur_tblur(void) {
+    const char* src =
+        "surface texsblur() {\n"
+        "    Ci = texture(\"t.tex\", s, t, \"sblur\", 0.1, \"tblur\", 0.2);\n"
+        "    Oi = Os;\n"
+        "}";
+    RhSLProgram* prog = compile_shader(src);
+    if (!prog) {
+        tests_run++; tests_failed++;
+        printf("  FAIL [texture_sblur_tblur] compilation failed\n");
+        return;
+    }
+    check_bool("texture_sblur_tblur", "flags==1", find_texture_flags(prog) == 1);
+
+    int str_idx = find_str_idx(prog, "t.tex");
+    RhTexture* tex = make_synthetic_texture(0.9f, 0.5f, 0.1f);
+    RhSLShader* shader = rh_sl_shader_create(prog);
+    inject_texture(shader, prog, str_idx, tex);
+
+    RhShaderContext ctx;
+    init_ctx(&ctx);
+    rh_sl_vm_shader_exec(&ctx, shader);
+
+    check_color("texture_sblur_tblur", "Ci", ctx.Ci, (RhColor){0.9f, 0.5f, 0.1f}, TOL);
+
+    rh_sl_shader_free(shader);
+    rh_sl_program_free(prog);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test: texture 4-point form (flags=2)                               */
+/* ------------------------------------------------------------------ */
+
+static void test_texture_4point(void) {
+    const char* src =
+        "surface tex4pt() {\n"
+        "    float ds = 0.01;\n"
+        "    Ci = texture(\"t.tex\",\n"
+        "        s-ds, t-ds,\n"
+        "        s+ds, t-ds,\n"
+        "        s-ds, t+ds,\n"
+        "        s+ds, t+ds);\n"
+        "    Oi = Os;\n"
+        "}";
+    RhSLProgram* prog = compile_shader(src);
+    if (!prog) {
+        tests_run++; tests_failed++;
+        printf("  FAIL [texture_4point] compilation failed\n");
+        return;
+    }
+    check_bool("texture_4point", "flags==2", find_texture_flags(prog) == 2);
+
+    int str_idx = find_str_idx(prog, "t.tex");
+    RhTexture* tex = make_synthetic_texture(0.3f, 0.6f, 0.9f);
+    RhSLShader* shader = rh_sl_shader_create(prog);
+    inject_texture(shader, prog, str_idx, tex);
+
+    RhShaderContext ctx;
+    init_ctx(&ctx);
+    ctx.u = 0.5f; ctx.v = 0.5f;
+    rh_sl_vm_shader_exec(&ctx, shader);
+
+    check_color("texture_4point", "Ci", ctx.Ci, (RhColor){0.3f, 0.6f, 0.9f}, TOL);
+
+    rh_sl_shader_free(shader);
+    rh_sl_program_free(prog);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -2122,6 +2347,13 @@ int main(void) {
 
     /* Golden test */
     test_matte_golden();
+
+    /* Texture builtin */
+    test_texture_basic();
+    test_texture_blur();
+    test_texture_width();
+    test_texture_sblur_tblur();
+    test_texture_4point();
 
     printf("\n=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) printf(", %d FAILED", tests_failed);

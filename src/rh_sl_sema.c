@@ -240,7 +240,7 @@ static const BuiltinFunc builtin_functions[] = {
     {"trace",    SL_TYPE_COLOR, 2, {SL_TYPE_POINT, SL_TYPE_VECTOR}, 0},
 
     /* Texture */
-    {"texture",     SL_TYPE_COLOR,  3, {SL_TYPE_STRING, SL_TYPE_FLOAT, SL_TYPE_FLOAT}, 0},
+    {"texture",     SL_TYPE_COLOR,  3, {SL_TYPE_STRING, SL_TYPE_FLOAT, SL_TYPE_FLOAT}, 1},
     {"shadow",      SL_TYPE_FLOAT,  2, {SL_TYPE_STRING, SL_TYPE_POINT}, 0},
     {"environment", SL_TYPE_COLOR,  2, {SL_TYPE_STRING, SL_TYPE_VECTOR}, 0},
 

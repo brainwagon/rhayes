@@ -765,9 +765,30 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
             RhSLShader* sh = (RhSLShader*)state->shader;
             const char* tname = get_string(sh, program, src2);
             RhTexture* tex = get_texture(state, sh, program, src2, tname);
+            float u, v, du, dv;
+            if (flags == 2) {
+                /* 4-point quad: src1 -> [s0,t0, s1,t1, s2,t2, s3,t3] */
+                float s0 = r[src1+0], t0 = r[src1+1];
+                float s1 = r[src1+2], t1 = r[src1+3];
+                float s2 = r[src1+4], t2 = r[src1+5];
+                float s3 = r[src1+6], t3 = r[src1+7];
+                u = (s0 + s1 + s2 + s3) * 0.25f;
+                v = (t0 + t1 + t2 + t3) * 0.25f;
+                float smin = fminf(fminf(s0, s1), fminf(s2, s3));
+                float smax = fmaxf(fmaxf(s0, s1), fmaxf(s2, s3));
+                float tmin = fminf(fminf(t0, t1), fminf(t2, t3));
+                float tmax = fmaxf(fmaxf(t0, t1), fmaxf(t2, t3));
+                du = smax - smin;
+                dv = tmax - tmin;
+            } else if (flags == 1) {
+                /* Explicit filter: src1 -> [s, t, du, dv] */
+                u = r[src1]; v = r[src1+1]; du = r[src1+2]; dv = r[src1+3];
+            } else {
+                /* Standard: src1 -> [s, t]; use global derivatives */
+                u = r[src1]; v = r[src1+1]; du = r[R_DU]; dv = r[R_DV];
+            }
             if (tex) {
-                RhColor c = rh_texture_sample(tex, r[src1], r[src1+1],
-                                              r[R_DU], r[R_DV]);
+                RhColor c = rh_texture_sample(tex, u, v, du, dv);
                 r[dst] = c.r; r[dst+1] = c.g; r[dst+2] = c.b;
             } else {
                 r[dst] = 1.0f; r[dst+1] = 0.0f; r[dst+2] = 1.0f;

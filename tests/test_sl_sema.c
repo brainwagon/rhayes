@@ -540,6 +540,41 @@ static void test_builtin_functions(void) {
         rh_sl_node_free(ast);
     }
 
+    /* texture with "blur" named param */
+    {
+        const char* src =
+            "surface test() { color c = texture(\"foo.tex\", s, t, \"blur\", 0.05); }";
+        RhSLSema sema;
+        RhSLNode* ast = parse_and_analyze(src, &sema);
+        check("texture blur param: no errors", sema.num_errors == 0);
+        if (sema.num_errors > 0) printf("    err: %s\n", sema.errors[0]);
+        rh_sl_node_free(ast);
+    }
+
+    /* texture with "width" and "blur" named params */
+    {
+        const char* src =
+            "surface test() { color c = texture(\"foo.tex\", s, t,"
+            " \"width\", 2.0, \"blur\", 0.01); }";
+        RhSLSema sema;
+        RhSLNode* ast = parse_and_analyze(src, &sema);
+        check("texture width+blur params: no errors", sema.num_errors == 0);
+        if (sema.num_errors > 0) printf("    err: %s\n", sema.errors[0]);
+        rh_sl_node_free(ast);
+    }
+
+    /* texture 4-point form */
+    {
+        const char* src =
+            "surface test() { float s0=s, t0=t;"
+            " color c = texture(\"foo.tex\", s0, t0, s0, t0, s0, t0, s0, t0); }";
+        RhSLSema sema;
+        RhSLNode* ast = parse_and_analyze(src, &sema);
+        check("texture 4-point: no errors", sema.num_errors == 0);
+        if (sema.num_errors > 0) printf("    err: %s\n", sema.errors[0]);
+        rh_sl_node_free(ast);
+    }
+
     /* unknown function -> error */
     {
         const char* src = "surface test() { float x = bogus(1.0); }";

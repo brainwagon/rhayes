@@ -357,9 +357,9 @@ static int emit_builtin_call(CodegenState* cg, const RhSLNode* node) {
     int nargs = count_args(node->u.call.args);
 
     /* Evaluate arguments into registers */
-    int arg_regs[6];
+    int arg_regs[16];
     int arg_idx = 0;
-    for (const RhSLNode* a = node->u.call.args; a && arg_idx < 6; a = a->next) {
+    for (const RhSLNode* a = node->u.call.args; a && arg_idx < 16; a = a->next) {
         arg_regs[arg_idx++] = emit_expr(cg, a);
     }
 
@@ -681,8 +681,8 @@ static int emit_builtin_call(CodegenState* cg, const RhSLNode* node) {
         }
     }
 
-    /* --- texture(name, s, t) --- */
-    if (strcmp(name, "texture") == 0 && nargs == 3) {
+    /* --- texture(name, s, t [, named_params...]) or (name, s0,t0,s1,t1,s2,t2,s3,t3) --- */
+    if (strcmp(name, "texture") == 0 && nargs >= 3) {
         /* Determine string table index from first arg */
         int str_idx = 0;
         const RhSLNode* str_arg = node->u.call.args;
@@ -699,13 +699,118 @@ static int emit_builtin_call(CodegenState* cg, const RhSLNode* node) {
                 }
             }
         }
-        /* Pack s,t into consecutive temp registers */
-        int st = alloc_reg(cg, 2);
-        emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)st, (uint16_t)arg_regs[1], 0));
-        emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)(st + 1), (uint16_t)arg_regs[2], 0));
-        int dst = alloc_reg(cg, 3);
-        emit(cg, RH_SL_INSTR(OP_TEXTURE, (uint16_t)dst, (uint16_t)st, (uint16_t)str_idx));
-        return dst;
+
+        if (nargs == 3) {
+            /* flags=0: basic 2-point, uses R_DU/R_DV */
+            int st = alloc_reg(cg, 2);
+            emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)st, (uint16_t)arg_regs[1], 0));
+            emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)(st + 1), (uint16_t)arg_regs[2], 0));
+            int dst = alloc_reg(cg, 3);
+            emit(cg, RH_SL_INSTR(OP_TEXTURE, (uint16_t)dst, (uint16_t)st, (uint16_t)str_idx));
+            return dst;
+        } else if (nargs == 9) {
+            /* flags=2: 4-point quad; src1..src1+7 = [s0,t0,s1,t1,s2,t2,s3,t3] */
+            int coord = alloc_reg(cg, 8);
+            for (int i = 0; i < 8; i++) {
+                emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)(coord + i),
+                                     (uint16_t)arg_regs[1 + i], 0));
+            }
+            int dst = alloc_reg(cg, 3);
+            emit(cg, RH_SL_INSTR_F(OP_TEXTURE, 2, (uint16_t)dst,
+                                   (uint16_t)coord, (uint16_t)str_idx));
+            return dst;
+        } else {
+            /* flags=1: named params -- compute effective du/dv from optional params */
+            int has_blur=0,   blur_reg=0;
+            int has_sblur=0,  sblur_reg=0;
+            int has_tblur=0,  tblur_reg=0;
+            int has_width=0,  width_reg=0;
+            int has_swidth=0, swidth_reg=0;
+            int has_twidth=0, twidth_reg=0;
+
+            /* Walk AST args from position 3, in key/value pairs */
+            const RhSLNode* a = node->u.call.args;
+            int ai = 0;
+            while (a && ai < 3) { a = a->next; ai++; }
+            int areg_i = 4; /* arg_regs[4] = first value (arg_regs[3] = first key) */
+            while (a && a->next && areg_i < 16) {
+                if (a->node_type == SL_NODE_STRING_LIT) {
+                    const char* key = a->u.string_lit.value;
+                    int val_reg = arg_regs[areg_i];
+                    if      (strcmp(key, "blur")   == 0) { has_blur   = 1; blur_reg   = val_reg; }
+                    else if (strcmp(key, "sblur")  == 0) { has_sblur  = 1; sblur_reg  = val_reg; }
+                    else if (strcmp(key, "tblur")  == 0) { has_tblur  = 1; tblur_reg  = val_reg; }
+                    else if (strcmp(key, "width")  == 0) { has_width  = 1; width_reg  = val_reg; }
+                    else if (strcmp(key, "swidth") == 0) { has_swidth = 1; swidth_reg = val_reg; }
+                    else if (strcmp(key, "twidth") == 0) { has_twidth = 1; twidth_reg = val_reg; }
+                }
+                a = a->next->next;
+                areg_i += 2;
+            }
+
+            /* Compute eff_du = R_DU * swidth + sblur */
+            int eff_du = alloc_reg(cg, 1);
+            emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)eff_du, R_DU, 0));
+            if (has_swidth) {
+                int t = alloc_reg(cg, 1);
+                emit(cg, RH_SL_INSTR(OP_FMUL, (uint16_t)t,
+                                     (uint16_t)eff_du, (uint16_t)swidth_reg));
+                eff_du = t;
+            } else if (has_width) {
+                int t = alloc_reg(cg, 1);
+                emit(cg, RH_SL_INSTR(OP_FMUL, (uint16_t)t,
+                                     (uint16_t)eff_du, (uint16_t)width_reg));
+                eff_du = t;
+            }
+            if (has_sblur) {
+                int t = alloc_reg(cg, 1);
+                emit(cg, RH_SL_INSTR(OP_FADD, (uint16_t)t,
+                                     (uint16_t)eff_du, (uint16_t)sblur_reg));
+                eff_du = t;
+            } else if (has_blur) {
+                int t = alloc_reg(cg, 1);
+                emit(cg, RH_SL_INSTR(OP_FADD, (uint16_t)t,
+                                     (uint16_t)eff_du, (uint16_t)blur_reg));
+                eff_du = t;
+            }
+
+            /* Compute eff_dv = R_DV * twidth + tblur */
+            int eff_dv = alloc_reg(cg, 1);
+            emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)eff_dv, R_DV, 0));
+            if (has_twidth) {
+                int t = alloc_reg(cg, 1);
+                emit(cg, RH_SL_INSTR(OP_FMUL, (uint16_t)t,
+                                     (uint16_t)eff_dv, (uint16_t)twidth_reg));
+                eff_dv = t;
+            } else if (has_width) {
+                int t = alloc_reg(cg, 1);
+                emit(cg, RH_SL_INSTR(OP_FMUL, (uint16_t)t,
+                                     (uint16_t)eff_dv, (uint16_t)width_reg));
+                eff_dv = t;
+            }
+            if (has_tblur) {
+                int t = alloc_reg(cg, 1);
+                emit(cg, RH_SL_INSTR(OP_FADD, (uint16_t)t,
+                                     (uint16_t)eff_dv, (uint16_t)tblur_reg));
+                eff_dv = t;
+            } else if (has_blur) {
+                int t = alloc_reg(cg, 1);
+                emit(cg, RH_SL_INSTR(OP_FADD, (uint16_t)t,
+                                     (uint16_t)eff_dv, (uint16_t)blur_reg));
+                eff_dv = t;
+            }
+
+            /* Pack [s, t, eff_du, eff_dv] into 4 consecutive registers */
+            int st4 = alloc_reg(cg, 4);
+            emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)st4,       (uint16_t)arg_regs[1], 0));
+            emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)(st4 + 1), (uint16_t)arg_regs[2], 0));
+            emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)(st4 + 2), (uint16_t)eff_du, 0));
+            emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)(st4 + 3), (uint16_t)eff_dv, 0));
+            int dst = alloc_reg(cg, 3);
+            emit(cg, RH_SL_INSTR_F(OP_TEXTURE, 1, (uint16_t)dst,
+                                   (uint16_t)st4, (uint16_t)str_idx));
+            return dst;
+        }
     }
 
     /* --- shadow(name, P) --- */
