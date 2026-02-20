@@ -6,9 +6,8 @@ Projection "perspective" "fov" 45
 PixelSamples 2 2
 
 TransformBegin
-    Rotate -25 1 0 0
-    Translate 0 1 -6
-
+    Rotate 25 1 0 0
+    Translate 0 0 -6
     WorldBegin
         # Light
         LightSource "distantlight" "intensity" 1.0 "from" [0 1 -1]
@@ -18,7 +17,7 @@ TransformBegin
             Color [0.2 0.8 0.2]
             Surface "matte"
             Translate 0 -1 0
-            Rotate -90 1 0 0
+            Rotate 90 1 0 0
             Disk 0 3 360
         AttributeEnd
 
