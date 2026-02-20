@@ -19,3 +19,6 @@ gmon.out
 # Test output (but not reference images)
 tests/output/
 !tests/reference/**/*.ppm
+
+# STL test assets (large binary files)
+tests/stl/
