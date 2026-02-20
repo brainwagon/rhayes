@@ -49,6 +49,11 @@ typedef struct {
     int label;         /* label for the function body */
     int return_reg;    /* register for return value */
     RhSLType return_type;
+    /* Formal parameter registers (for argument passing at call site) */
+    int formal_regs[8];
+    RhSLType formal_types[8];
+    int formal_is_output[8];
+    int num_formals;
 } FuncEntry;
 
 typedef struct {
@@ -92,6 +97,10 @@ typedef struct {
     /* User function entries */
     FuncEntry funcs[MAX_FUNCS];
     int num_funcs;
+
+    /* Return-context for current function being emitted */
+    int current_func_return_reg;
+    RhSLType current_func_return_type;
 
     /* Error reporting */
     RhSLCodegenErrors* err;
@@ -343,6 +352,19 @@ static void emit_stmt(CodegenState* cg, const RhSLNode* node);
 /* ------------------------------------------------------------------ */
 /*  Expression code generation                                         */
 /* ------------------------------------------------------------------ */
+
+/* Type promotion check (mirrors sema's can_promote) */
+static int cg_can_promote(RhSLType from, RhSLType to) {
+    if (from == to) return 1;
+    if (from == SL_TYPE_FLOAT &&
+        (to == SL_TYPE_COLOR || to == SL_TYPE_POINT ||
+         to == SL_TYPE_VECTOR || to == SL_TYPE_NORMAL)) return 1;
+    if ((from == SL_TYPE_COLOR || from == SL_TYPE_POINT ||
+         from == SL_TYPE_VECTOR || from == SL_TYPE_NORMAL) &&
+        (to   == SL_TYPE_COLOR || to   == SL_TYPE_POINT ||
+         to   == SL_TYPE_VECTOR || to   == SL_TYPE_NORMAL)) return 1;
+    return 0;
+}
 
 /* Count arguments in a linked list */
 static int count_args(const RhSLNode* args) {
@@ -967,27 +989,68 @@ static int emit_builtin_call(CodegenState* cg, const RhSLNode* node) {
 
     /* --- User-defined function call --- */
     {
+        /* Collect arg types from resolved AST nodes */
+        RhSLType udf_arg_types[8];
+        int udf_ai = 0;
+        for (const RhSLNode* a = node->u.call.args; a && udf_ai < 8;
+             a = a->next, udf_ai++)
+            udf_arg_types[udf_ai] = a->resolved_type;
+
+        /* Score-based overload resolution */
         FuncEntry* fe = NULL;
+        int best_score = -1;
         for (int i = 0; i < cg->num_funcs; i++) {
-            if (strcmp(cg->funcs[i].name, name) == 0) {
-                fe = &cg->funcs[i];
-                break;
+            if (strcmp(cg->funcs[i].name, name) != 0) continue;
+            if (cg->funcs[i].num_formals != arg_idx) continue;
+            int score = 0, ok = 1;
+            for (int j = 0; j < arg_idx; j++) {
+                RhSLType ft = cg->funcs[i].formal_types[j];
+                if (udf_arg_types[j] == ft) score += 2;
+                else if (cg_can_promote(udf_arg_types[j], ft)) score += 1;
+                else { ok = 0; break; }
             }
+            if (!ok) continue;
+            if (score > best_score) { best_score = score; fe = &cg->funcs[i]; }
         }
+
         if (fe) {
-            /* Copy arguments to function parameter registers.
-             * Convention: function params start right after the function's return reg. */
-            /* For now: args are already in registers from emit_expr above.
-             * We just need to emit OP_CALL to the function's label. */
+            const RhSLNode* call_arg = node->u.call.args;
+
+            /* Copy-in: eval registers → formal registers */
+            for (int i = 0; i < fe->num_formals && i < arg_idx; i++,
+                     call_arg = call_arg ? call_arg->next : NULL) {
+                int nc = type_reg_count(fe->formal_types[i]);
+                uint8_t mv = (nc == 3) ? OP_VMOV : OP_FMOV;
+                emit(cg, RH_SL_INSTR(mv, (uint16_t)fe->formal_regs[i],
+                                         (uint16_t)arg_regs[i], 0));
+            }
+
             emit_jump(cg, OP_CALL, fe->label, 0);
 
-            /* Copy return value from function's return register */
+            /* Copy-out: formal registers → caller's lvalue registers (output params) */
+            call_arg = node->u.call.args;
+            for (int i = 0; i < fe->num_formals && i < arg_idx; i++,
+                     call_arg = call_arg ? call_arg->next : NULL) {
+                if (!fe->formal_is_output[i]) continue;
+                int target_reg = -1;
+                if (call_arg && call_arg->node_type == SL_NODE_IDENT) {
+                    CGSymbol* sym = cg_lookup(cg, call_arg->u.ident.name);
+                    if (sym) target_reg = sym->reg;
+                }
+                if (target_reg < 0) continue;
+                int nc = type_reg_count(fe->formal_types[i]);
+                uint8_t mv = (nc == 3) ? OP_VMOV : OP_FMOV;
+                emit(cg, RH_SL_INSTR(mv, (uint16_t)target_reg,
+                                         (uint16_t)fe->formal_regs[i], 0));
+            }
+
+            /* Copy return value to fresh destination register */
             int nc = type_reg_count(fe->return_type);
-            int dst = alloc_reg(cg, nc);
-            if (nc == 1) {
-                emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)dst, (uint16_t)fe->return_reg, 0));
-            } else {
-                emit(cg, RH_SL_INSTR(OP_VMOV, (uint16_t)dst, (uint16_t)fe->return_reg, 0));
+            int dst = alloc_reg(cg, nc > 0 ? nc : 1);
+            if (nc > 0) {
+                uint8_t mv = (nc == 3) ? OP_VMOV : OP_FMOV;
+                emit(cg, RH_SL_INSTR(mv, (uint16_t)dst,
+                                         (uint16_t)fe->return_reg, 0));
             }
             return dst;
         }
@@ -1246,9 +1309,19 @@ static int emit_expr(CodegenState* cg, const RhSLNode* node) {
         return dst;
     }
 
-    case SL_NODE_ARRAY_ACCESS:
-        /* Not fully supported -- evaluate array expression */
+    case SL_NODE_ARRAY_ACCESS: {
+        RhSLType at = node->u.array_access.array->resolved_type;
+        if (is_tuple_type(at)) {
+            int base = emit_expr(cg, node->u.array_access.array);
+            int comp = 0;
+            if (node->u.array_access.index->node_type == SL_NODE_FLOAT_LIT)
+                comp = (int)node->u.array_access.index->u.float_lit.value;
+            int dst = alloc_reg(cg, 1);
+            emit(cg, RH_SL_INSTR_F(OP_VCOMP, (uint8_t)comp, (uint16_t)dst, (uint16_t)base, 0));
+            return dst;
+        }
         return emit_expr(cg, node->u.array_access.array);
+    }
 
     default:
         return 0;
@@ -1304,6 +1377,15 @@ static void emit_stmt(CodegenState* cg, const RhSLNode* node) {
             int comp = node->u.assign.target->u.comp_access.component;
             emit(cg, RH_SL_INSTR_F(OP_VSETCOMP, (uint8_t)comp, (uint16_t)operand_reg, (uint16_t)val, 0));
             break;
+        } else if (node->u.assign.target->node_type == SL_NODE_ARRAY_ACCESS) {
+            /* Assign to vector component: e.g., p[0] = expr */
+            int base_reg = emit_expr(cg, node->u.assign.target->u.array_access.array);
+            int comp = 0;
+            const RhSLNode* idx = node->u.assign.target->u.array_access.index;
+            if (idx && idx->node_type == SL_NODE_FLOAT_LIT)
+                comp = (int)idx->u.float_lit.value;
+            emit(cg, RH_SL_INSTR_F(OP_VSETCOMP, (uint8_t)comp, (uint16_t)base_reg, (uint16_t)val, 0));
+            break;
         }
 
         if (target_reg < 0) break;
@@ -1327,6 +1409,26 @@ static void emit_stmt(CodegenState* cg, const RhSLNode* node) {
         if (node->u.compound_assign.target->node_type == SL_NODE_IDENT) {
             CGSymbol* sym = cg_lookup(cg, node->u.compound_assign.target->u.ident.name);
             if (sym) target_reg = sym->reg;
+        } else if (node->u.compound_assign.target->node_type == SL_NODE_ARRAY_ACCESS) {
+            /* Compound assign to vector component: e.g., p[1] -= r */
+            int base_reg = emit_expr(cg, node->u.compound_assign.target->u.array_access.array);
+            int comp = 0;
+            const RhSLNode* idx = node->u.compound_assign.target->u.array_access.index;
+            if (idx && idx->node_type == SL_NODE_FLOAT_LIT)
+                comp = (int)idx->u.float_lit.value;
+            int cur = alloc_reg(cg, 1);
+            emit(cg, RH_SL_INSTR_F(OP_VCOMP, (uint8_t)comp, (uint16_t)cur, (uint16_t)base_reg, 0));
+            uint8_t op;
+            switch (node->u.compound_assign.op) {
+            case SL_COMPOUND_ADD: op = OP_FADD; break;
+            case SL_COMPOUND_SUB: op = OP_FSUB; break;
+            case SL_COMPOUND_MUL: op = OP_FMUL; break;
+            case SL_COMPOUND_DIV: op = OP_FDIV; break;
+            default:              op = OP_FADD; break;
+            }
+            emit(cg, RH_SL_INSTR(op, (uint16_t)cur, (uint16_t)cur, (uint16_t)val));
+            emit(cg, RH_SL_INSTR_F(OP_VSETCOMP, (uint8_t)comp, (uint16_t)base_reg, (uint16_t)cur, 0));
+            break;
         }
         if (target_reg < 0) break;
 
@@ -1475,10 +1577,11 @@ static void emit_stmt(CodegenState* cg, const RhSLNode* node) {
 
     case SL_NODE_RETURN: {
         if (node->u.ret.value) {
-            /* For user functions, emit value and RET.
-             * The function's return register should have been set up by the
-             * function emission code. For now we just emit RET. */
-            (void)emit_expr(cg, node->u.ret.value);
+            int val = emit_expr(cg, node->u.ret.value);
+            int ret_reg = cg->current_func_return_reg;
+            int nc = type_reg_count(cg->current_func_return_type);
+            uint8_t mov_op = (nc == 3) ? OP_VMOV : OP_FMOV;
+            emit(cg, RH_SL_INSTR(mov_op, (uint16_t)ret_reg, (uint16_t)val, 0));
         }
         emit(cg, RH_SL_INSTR(OP_RET, 0, 0, 0));
         break;
@@ -1643,23 +1746,45 @@ static void emit_function(CodegenState* cg, const RhSLNode* fn) {
     fe->return_type = fn->u.function.return_type;
     fe->label = label_new(cg);
 
-    /* Allocate return register */
+    /* Allocate return register and formal registers BEFORE push_scope so they
+     * are never reclaimed by pop_scope and never overlap with shader body regs. */
     int ret_nc = type_reg_count(fn->u.function.return_type);
     fe->return_reg = alloc_reg(cg, ret_nc > 0 ? ret_nc : 1);
+    fe->num_formals = 0;
+
+    for (const RhSLNode* f = fn->u.function.formals; f; f = f->next) {
+        if (f->node_type == SL_NODE_FORMAL && fe->num_formals < 8) {
+            int nc = type_reg_count(f->u.formal.type);
+            int reg = alloc_reg(cg, nc);
+            fe->formal_regs[fe->num_formals] = reg;
+            fe->formal_types[fe->num_formals] = f->u.formal.type;
+            fe->formal_is_output[fe->num_formals] = f->u.formal.is_output;
+            fe->num_formals++;
+        }
+    }
 
     /* Define function label */
     label_define(cg, fe->label);
 
     push_scope(cg);
 
-    /* Declare formals (allocate registers for them) */
-    for (const RhSLNode* f = fn->u.function.formals; f; f = f->next) {
-        if (f->node_type == SL_NODE_FORMAL) {
-            int nc = type_reg_count(f->u.formal.type);
-            int reg = alloc_reg(cg, nc);
-            cg_declare(cg, f->u.formal.name, f->u.formal.type, reg);
+    /* Add formals to symbol table (using already-allocated registers) */
+    {
+        int fi = 0;
+        for (const RhSLNode* f = fn->u.function.formals; f; f = f->next) {
+            if (f->node_type == SL_NODE_FORMAL && fi < fe->num_formals) {
+                cg_declare(cg, f->u.formal.name, f->u.formal.type,
+                           fe->formal_regs[fi]);
+                fi++;
+            }
         }
     }
+
+    /* Set return context for SL_NODE_RETURN emission */
+    int saved_ret_reg = cg->current_func_return_reg;
+    RhSLType saved_ret_type = cg->current_func_return_type;
+    cg->current_func_return_reg = fe->return_reg;
+    cg->current_func_return_type = fe->return_type;
 
     /* Emit function body */
     if (fn->u.function.body)
@@ -1667,6 +1792,9 @@ static void emit_function(CodegenState* cg, const RhSLNode* fn) {
 
     /* Emit RET at end (safety net) */
     emit(cg, RH_SL_INSTR(OP_RET, 0, 0, 0));
+
+    cg->current_func_return_reg = saved_ret_reg;
+    cg->current_func_return_type = saved_ret_type;
 
     pop_scope(cg);
 }
@@ -1839,6 +1967,11 @@ RhSLProgram* rh_sl_codegen(const RhSLNode* shader, RhSLCodegenErrors* err_out) {
         for (const RhSLNode* fn = shader->u.shader.functions; fn; fn = fn->next) {
             emit_function(&cg, fn);
         }
+
+        /* Advance next_reg past all registers used by function bodies so
+         * the shader body never reuses a register that a function body writes. */
+        if (cg.max_reg > cg.next_reg)
+            cg.next_reg = cg.max_reg;
 
         label_define(&cg, body_label);
     }

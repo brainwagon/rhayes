@@ -246,8 +246,8 @@ typedef struct {
     float intensity;
     RhMat4 transform; // Transform at creation time
     // Spotlight parameters
-    float coneangle;        // Half-angle of full illumination cone (degrees)
-    float conedeltaangle;   // Penumbra width (degrees)
+    float coneangle;        // Half-angle of full illumination cone (radians)
+    float conedeltaangle;   // Penumbra width (radians)
     float beamdistribution; // Cosine power for beam shape
     // Shadow map parameters
     RhShadowMap* shadowmap;     // Shadow map data (NULL if no shadows)

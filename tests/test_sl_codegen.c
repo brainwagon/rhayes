@@ -2304,6 +2304,132 @@ static void test_printf_tuple_arg(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Test: user-defined functions                                       */
+/* ------------------------------------------------------------------ */
+
+static void test_user_functions(void) {
+    /* 1. Float return: square(x) = x*x */
+    {
+        const char* src =
+            "float square(float x) { return x * x; }\n"
+            "surface uf_square() {\n"
+            "    float r = square(3.0);\n"
+            "    Ci = color(r, 0, 0);\n"
+            "    Oi = Os;\n"
+            "}";
+        RhShaderContext ctx;
+        init_ctx(&ctx);
+        if (run_shader(src, &ctx, NULL, 0) != 0) {
+            tests_run++; tests_failed++;
+            printf("  FAIL [uf_square] compilation failed\n");
+        } else {
+            check_float("uf_square", "Ci.r", ctx.Ci.r, 9.0f, TOL);
+        }
+    }
+
+    /* 2. Color return: tint(c, f) = c * f */
+    {
+        const char* src =
+            "color tint(color c; float f) { return c * f; }\n"
+            "surface uf_tint() {\n"
+            "    Ci = tint(color(1, 0.5, 0.25), 2.0);\n"
+            "    Oi = Os;\n"
+            "}";
+        RhShaderContext ctx;
+        init_ctx(&ctx);
+        if (run_shader(src, &ctx, NULL, 0) != 0) {
+            tests_run++; tests_failed++;
+            printf("  FAIL [uf_tint] compilation failed\n");
+        } else {
+            check_color("uf_tint", "Ci", ctx.Ci,
+                        (RhColor){2.0f, 1.0f, 0.5f}, TOL);
+        }
+    }
+
+    /* 3. Output parameter: addone(output x) increments x */
+    {
+        const char* src =
+            "void addone(output float x) { x = x + 1; }\n"
+            "surface uf_addone() {\n"
+            "    float v = 4.0;\n"
+            "    addone(v);\n"
+            "    Ci = color(v, 0, 0);\n"
+            "    Oi = Os;\n"
+            "}";
+        RhShaderContext ctx;
+        init_ctx(&ctx);
+        if (run_shader(src, &ctx, NULL, 0) != 0) {
+            tests_run++; tests_failed++;
+            printf("  FAIL [uf_addone] compilation failed\n");
+        } else {
+            check_float("uf_addone", "v_after", ctx.Ci.r, 5.0f, TOL);
+        }
+    }
+
+    /* 4. Multiple functions: square and tint both called */
+    {
+        const char* src =
+            "float square(float x) { return x * x; }\n"
+            "color tint(color c; float f) { return c * f; }\n"
+            "surface uf_multi() {\n"
+            "    float s = square(2.0);\n"
+            "    Ci = tint(color(1, 1, 1), s);\n"
+            "    Oi = Os;\n"
+            "}";
+        RhShaderContext ctx;
+        init_ctx(&ctx);
+        if (run_shader(src, &ctx, NULL, 0) != 0) {
+            tests_run++; tests_failed++;
+            printf("  FAIL [uf_multi] compilation failed\n");
+        } else {
+            check_color("uf_multi", "Ci", ctx.Ci,
+                        (RhColor){4.0f, 4.0f, 4.0f}, TOL);
+        }
+    }
+
+    /* 5. Void function called as statement: sets Ci */
+    {
+        const char* src =
+            "void setci(color c) { Ci = c; }\n"
+            "surface uf_setci() {\n"
+            "    setci(color(0.1, 0.2, 0.3));\n"
+            "    Oi = Os;\n"
+            "}";
+        RhShaderContext ctx;
+        init_ctx(&ctx);
+        if (run_shader(src, &ctx, NULL, 0) != 0) {
+            tests_run++; tests_failed++;
+            printf("  FAIL [uf_setci] compilation failed\n");
+        } else {
+            check_color("uf_setci", "Ci", ctx.Ci,
+                        (RhColor){0.1f, 0.2f, 0.3f}, TOL);
+        }
+    }
+
+    /* 6. Overloaded functions: float vs point dispatch */
+    {
+        const char* src =
+            "float overloaded(float x) { return x * 2.0; }\n"
+            "float overloaded(point p) { return xcomp(p); }\n"
+            "surface uf_overload() {\n"
+            "    float a = overloaded(3.0);\n"
+            "    float b = overloaded(point(1.0, 2.0, 3.0));\n"
+            "    Ci = color(a, b, 0);\n"
+            "    Oi = Os;\n"
+            "}";
+        RhShaderContext ctx;
+        init_ctx(&ctx);
+        if (run_shader(src, &ctx, NULL, 0) != 0) {
+            tests_run++; tests_failed++;
+            printf("  FAIL [uf_overload] compilation failed\n");
+        } else {
+            check_float("uf_overload", "float_variant", ctx.Ci.r, 6.0f, TOL);
+            check_float("uf_overload", "point_variant",  ctx.Ci.g, 1.0f, TOL);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -2418,6 +2544,9 @@ int main(void) {
     test_printf_no_args();
     test_printf_float_args();
     test_printf_tuple_arg();
+
+    /* User-defined functions */
+    test_user_functions();
 
     printf("\n=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) printf(", %d FAILED", tests_failed);

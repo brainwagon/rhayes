@@ -149,8 +149,8 @@ static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor
                     attenuation = 0.0f;
                 } else if (angle > inner_angle) {
                     float t = (angle - inner_angle) / (outer_angle - inner_angle);
-                    attenuation = 1.0f - t;
-                    attenuation *= attenuation;
+                    float cone_atten = 1.0f - t;
+                    attenuation *= cone_atten * cone_atten;
                 }
 
                 if (attenuation > 0.0f && l->beamdistribution > 0.0f) {
@@ -227,6 +227,12 @@ void rh_shader_surface_matte(RhShaderContext* ctx, void* params) {
     float Ka = p ? p->Ka : 1.0f;
     float Kd = p ? p->Kd : 1.0f;
 
+    /* faceforward: flip normal to face toward viewer, matching matte.sl */
+    RhVec3 Nf = rh_vec3_normalize(ctx->N);
+    if (rh_vec3_dot(Nf, ctx->I) > 0.0f)
+        Nf = rh_vec3_mul(Nf, -1.0f);
+    ctx->N = Nf;
+
     RhColor ambient = {0,0,0};
     RhColor diffuse = {0,0,0};
     RhColor specular = {0,0,0}; // Unused for matte
@@ -265,6 +271,12 @@ void rh_shader_surface_plastic(RhShaderContext* ctx, void* params) {
     float Ks = p ? p->Ks : 0.5f;
     float r = p ? p->roughness : 0.1f;
     RhColor Cspec = p ? p->specular_color : (RhColor){1,1,1};
+
+    /* faceforward: flip normal to face toward viewer */
+    RhVec3 Nf = rh_vec3_normalize(ctx->N);
+    if (rh_vec3_dot(Nf, ctx->I) > 0.0f)
+        Nf = rh_vec3_mul(Nf, -1.0f);
+    ctx->N = Nf;
 
     RhColor ambient = {0,0,0};
     RhColor diff = {0,0,0};
@@ -307,6 +319,12 @@ void rh_shader_surface_metal(RhShaderContext* ctx, void* params) {
     float Ks = p ? p->Ks : 1.0f;
     float r = p ? p->roughness : 0.1f;
 
+    /* faceforward: flip normal to face toward viewer */
+    RhVec3 Nf = rh_vec3_normalize(ctx->N);
+    if (rh_vec3_dot(Nf, ctx->I) > 0.0f)
+        Nf = rh_vec3_mul(Nf, -1.0f);
+    ctx->N = Nf;
+
     RhColor ambient = {0,0,0};
     RhColor diff = {0,0,0}; // Unused - metal has no diffuse
     RhColor spec = {0,0,0};
@@ -341,6 +359,12 @@ void rh_shader_surface_paintedplastic(RhShaderContext* ctx, void* params) {
     float Ks = p ? p->Ks : 0.5f;
     float r = p ? p->roughness : 0.1f;
     RhColor Cspec = p ? p->specular_color : (RhColor){1,1,1};
+
+    /* faceforward: flip normal to face toward viewer */
+    RhVec3 Nf = rh_vec3_normalize(ctx->N);
+    if (rh_vec3_dot(Nf, ctx->I) > 0.0f)
+        Nf = rh_vec3_mul(Nf, -1.0f);
+    ctx->N = Nf;
 
     // Sample texture if available, otherwise use Cs
     RhColor surface_color;
@@ -394,6 +418,12 @@ void rh_shader_surface_shinymetal(RhShaderContext* ctx, void* params) {
     float Ks = p ? p->Ks : 1.0f;
     float Kr = p ? p->Kr : 0.5f;
     float r = p ? p->roughness : 0.1f;
+
+    /* faceforward: flip normal to face toward viewer */
+    RhVec3 Nf = rh_vec3_normalize(ctx->N);
+    if (rh_vec3_dot(Nf, ctx->I) > 0.0f)
+        Nf = rh_vec3_mul(Nf, -1.0f);
+    ctx->N = Nf;
 
     RhColor ambient = {0,0,0};
     RhColor diff = {0,0,0}; // Unused - metal has no diffuse

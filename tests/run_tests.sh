@@ -132,6 +132,13 @@ generate_html_report() {
           border: 1px solid #e5e7eb; }
     figcaption { font-size: 10px; color: #9ca3af; margin-top: 2px; }
     .no-img { color: #d1d5db; font-size: 16px; }
+    .toggle-wrap { position: relative; width: 150px; height: 110px; display: inline-block; }
+    .toggle-wrap img { position: absolute; top: 50%; left: 50%;
+                       transform: translate(-50%,-50%); margin: 0; }
+    .toggle-ref { animation: tog-r 2s steps(1) infinite; }
+    .toggle-gen { animation: tog-g 2s steps(1) infinite; }
+    @keyframes tog-r { 0% { opacity: 1; } 50% { opacity: 0; } }
+    @keyframes tog-g { 0% { opacity: 0; } 50% { opacity: 1; } }
   </style>
 </head>
 <body>
@@ -155,6 +162,7 @@ HTMLHEAD
         <th>Roundtrip</th>
         <th>Reference</th>
         <th>Generated</th>
+        <th>Compare</th>
       </tr>
     </thead>
     <tbody>
@@ -169,7 +177,7 @@ HTMLTABLE
             local ref_rel="${ROW_REF_REL[$key]}"
             local out_rel="${ROW_OUT_REL[$key]}"
 
-            local ref_html out_html
+            local ref_html out_html compare_html
             if [ -n "$ref_rel" ]; then
                 ref_html="<figure><a href=\"../reference/${ref_rel}\" target=\"_blank\"><img src=\"../reference/${ref_rel}\" alt=\"ref\"></a><figcaption>${ROW_REF_MTIME[$key]}</figcaption></figure>"
             else
@@ -182,6 +190,12 @@ HTMLTABLE
                 out_html="<span class=\"no-img\">&mdash;</span>"
             fi
 
+            if [ -n "$ref_rel" ] && [ -n "$out_rel" ]; then
+                compare_html="<div class=\"toggle-wrap\"><img class=\"toggle-ref\" src=\"../reference/${ref_rel}\" alt=\"ref\"><img class=\"toggle-gen\" src=\"${out_rel}\" alt=\"gen\"></div>"
+            else
+                compare_html="<span class=\"no-img\">&mdash;</span>"
+            fi
+
             echo "      <tr>"
             echo "        <td class=\"col-name\">${key}</td>"
             echo "        <td class=\"col-icon\">${parse_icon}</td>"
@@ -189,6 +203,7 @@ HTMLTABLE
             echo "        <td class=\"col-icon\">${roundtrip_icon}</td>"
             echo "        <td class=\"col-img\">${ref_html}</td>"
             echo "        <td class=\"col-img\">${out_html}</td>"
+            echo "        <td class=\"col-img\">${compare_html}</td>"
             echo "      </tr>"
         done
 

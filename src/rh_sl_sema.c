@@ -423,15 +423,29 @@ static RhSLType analyze_call(RhSLSema* sema, RhSLNode* node) {
         return bf->return_type;
     }
 
-    /* Try user-defined functions */
+    /* Try user-defined functions (score-based overload resolution) */
+    RhSLNode* best_fn = NULL;
+    int best_score = -1;
     for (RhSLNode* fn = sema->functions; fn; fn = fn->next) {
         if (fn->node_type != SL_NODE_FUNCTION) continue;
         if (strcmp(fn->u.function.name, name) != 0) continue;
         int nformals = rh_sl_node_count(fn->u.function.formals);
         if (nformals != nargs) continue;
-        /* Found matching user function */
-        node->resolved_type = fn->u.function.return_type;
-        return fn->u.function.return_type;
+        int score = 0, ok = 1, j = 0;
+        for (RhSLNode* f = fn->u.function.formals; f && j < nargs;
+             f = f->next, j++) {
+            if (f->node_type != SL_NODE_FORMAL) continue;
+            RhSLType ft = f->u.formal.type;
+            if (j < MAX_BUILTIN_PARAMS && arg_types[j] == ft) score += 2;
+            else if (j < MAX_BUILTIN_PARAMS && can_promote(arg_types[j], ft)) score += 1;
+            else { ok = 0; break; }
+        }
+        if (!ok) continue;
+        if (score > best_score) { best_score = score; best_fn = fn; }
+    }
+    if (best_fn) {
+        node->resolved_type = best_fn->u.function.return_type;
+        return best_fn->u.function.return_type;
     }
 
     sema_error(sema, node->line, "unknown function '%s' with %d argument(s)", name, nargs);
@@ -534,8 +548,9 @@ static RhSLType analyze_expr(RhSLSema* sema, RhSLNode* node) {
     case SL_NODE_ARRAY_ACCESS: {
         RhSLType at = analyze_expr(sema, node->u.array_access.array);
         analyze_expr(sema, node->u.array_access.index);
-        node->resolved_type = at;
-        return at;
+        RhSLType elem = is_tuple_type(at) ? SL_TYPE_FLOAT : at;
+        node->resolved_type = elem;
+        return elem;
     }
 
     case SL_NODE_COMP_ACCESS: {

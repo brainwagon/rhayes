@@ -199,6 +199,7 @@ static int evaluate_light(const RhSLLight* light, const float* regs,
         Lx = dx * inv;
         Ly = dy * inv;
         Lz = dz * inv;
+        attenuation /= (len * len); /* inverse-square distance falloff, matching pointlight.sl */
 
         /* Spotlight cone attenuation */
         if (light->type[0] == 's') {
@@ -217,8 +218,8 @@ static int evaluate_light(const RhSLLight* light, const float* regs,
                 attenuation = 0.0f;
             } else if (angle > inner) {
                 float t = (angle - inner) / (outer - inner);
-                attenuation = 1.0f - t;
-                attenuation *= attenuation;
+                float cone_atten = 1.0f - t;
+                attenuation *= cone_atten * cone_atten;
             }
 
             if (attenuation > 0.0f && light->beamdistribution > 0.0f) {
@@ -1050,20 +1051,25 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
                     if (spec == 'f' || spec == 'g' || spec == 'e' ||
                         spec == 'i' || spec == 'd') {
                         float val = r[base + offset++];
+                        int written;
                         if (spec == 'd' || spec == 'i')
-                            out += snprintf(buf + out, sizeof(buf) - (size_t)out,
-                                           "%d", (int)val);
+                            written = snprintf(buf + out, sizeof(buf) - (size_t)out,
+                                               "%d", (int)val);
                         else
-                            out += snprintf(buf + out, sizeof(buf) - (size_t)out,
-                                           "%g", val);
+                            written = snprintf(buf + out, sizeof(buf) - (size_t)out,
+                                               "%g", val);
+                        if (written > 0) out += written;
+                        if (out >= (int)sizeof(buf)) out = (int)sizeof(buf) - 1;
                     } else if (spec == 'p' || spec == 'c' ||
                                spec == 'v' || spec == 'n') {
                         float x = r[base + offset];
                         float y = r[base + offset + 1];
                         float z = r[base + offset + 2];
                         offset += 3;
-                        out += snprintf(buf + out, sizeof(buf) - (size_t)out,
-                                        "%g %g %g", x, y, z);
+                        int written = snprintf(buf + out, sizeof(buf) - (size_t)out,
+                                              "%g %g %g", x, y, z);
+                        if (written > 0) out += written;
+                        if (out >= (int)sizeof(buf)) out = (int)sizeof(buf) - 1;
                     } else if (spec == '%') {
                         if (out < (int)sizeof(buf) - 1) buf[out++] = '%';
                     } else {
@@ -1077,7 +1083,7 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
                 }
             }
             buf[out] = '\0';
-            fprintf(stderr, "%s", buf);
+            fprintf(stdout, "%s", buf);
             break;
         }
 
@@ -1120,8 +1126,15 @@ void rh_sl_vm_shader_exec(RhShaderContext* ctx, void* params) {
     regs[R_E+0] = 0.0f;       regs[R_E+1] = 0.0f;       regs[R_E+2] = 0.0f;
     regs[R_CS+0] = ctx->Cs.r; regs[R_CS+1] = ctx->Cs.g; regs[R_CS+2] = ctx->Cs.b;
     regs[R_OS+0] = ctx->Os.r; regs[R_OS+1] = ctx->Os.g; regs[R_OS+2] = ctx->Os.b;
-    regs[R_CI+0] = 0.0f;      regs[R_CI+1] = 0.0f;      regs[R_CI+2] = 0.0f;
-    regs[R_OI+0] = 1.0f;      regs[R_OI+1] = 1.0f;      regs[R_OI+2] = 1.0f;
+    /* Volume/atmosphere shaders read the surface shader's Ci/Oi;
+     * surface shaders start with Ci=0, Oi=1 and compute from scratch. */
+    if (prog->shader_type == RH_SL_SHADER_VOLUME) {
+        regs[R_CI+0] = ctx->Ci.r; regs[R_CI+1] = ctx->Ci.g; regs[R_CI+2] = ctx->Ci.b;
+        regs[R_OI+0] = ctx->Oi.r; regs[R_OI+1] = ctx->Oi.g; regs[R_OI+2] = ctx->Oi.b;
+    } else {
+        regs[R_CI+0] = 0.0f;      regs[R_CI+1] = 0.0f;      regs[R_CI+2] = 0.0f;
+        regs[R_OI+0] = 1.0f;      regs[R_OI+1] = 1.0f;      regs[R_OI+2] = 1.0f;
+    }
     regs[R_S] = ctx->u;       /* s defaults to u if not overridden */
     regs[R_T] = ctx->v;       /* t defaults to v */
     regs[R_U] = ctx->u;
