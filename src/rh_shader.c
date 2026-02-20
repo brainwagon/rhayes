@@ -100,12 +100,15 @@ static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor
         RhColor light_cl;
 
         if (l->light_shader) {
-            // Execute VM light shader (light params are in camera space)
+            // Execute VM light shader (light params are in camera space).
+            // Pass transform_ctx so the shader VM can handle coordinate transforms
+            // (e.g. solar blocks transform their axis to camera space).
             RhShaderContext ctx_light;
             memset(&ctx_light, 0, sizeof(ctx_light));
             ctx_light.Ps = ctx->P;
             ctx_light.N = ctx->N;
             ctx_light.P_world = ctx->P_world;
+            ctx_light.transform_ctx = ctx->transform_ctx;
             l->light_shader(&ctx_light, l->light_shader_params);
 
             // Check if light contributes (L == 0 means outside cone or ambient)
@@ -114,7 +117,7 @@ static void calculate_lights(RhShaderContext* ctx, RhColor* ambient_out, RhColor
                         + ctx_light.L_out.z * ctx_light.L_out.z;
             if (Llen2 < 1e-24f) continue;
 
-            // L from illuminate block is light-to-surface (Ps - from).
+            // L from illuminate/solar block is light-to-surface.
             // Negate to get surface-to-light for N.L calculations.
             float inv_len = 1.0f / sqrtf(Llen2);
             L.x = -ctx_light.L_out.x * inv_len;

@@ -659,19 +659,19 @@ static RhVec3 evaluate_patch_bicubic(const RhPrimitive* p, RhFloat u, RhFloat v)
 
 static RhVec3 evaluate_patch_bilinear(const RhPrimitive* p, RhFloat u, RhFloat v) {
     // Bilinear interpolation:
-    // P(u,v) = (1-u)(1-v)*cp[0] + u(1-v)*cp[1] + uv*cp[2] + (1-u)v*cp[3]
-    // Control point order (RenderMan convention, u varies faster):
+    // P(u,v) = (1-u)(1-v)*cp[0] + u(1-v)*cp[1] + (1-u)v*cp[2] + uv*cp[3]
+    // Control point order (RenderMan convention, row-major, u varies faster):
     // cp[0]: (u=0, v=0) - bottom-left
     // cp[1]: (u=1, v=0) - bottom-right
-    // cp[2]: (u=1, v=1) - top-right
-    // cp[3]: (u=0, v=1) - top-left
+    // cp[2]: (u=0, v=1) - top-left
+    // cp[3]: (u=1, v=1) - top-right
 
     const RhVec3* cp = p->data.bilinear.cp;
 
     RhFloat w0 = (1.0f - u) * (1.0f - v);  // cp[0] weight
     RhFloat w1 = u * (1.0f - v);            // cp[1] weight
-    RhFloat w2 = u * v;                     // cp[2] weight
-    RhFloat w3 = (1.0f - u) * v;            // cp[3] weight
+    RhFloat w2 = (1.0f - u) * v;            // cp[2] weight
+    RhFloat w3 = u * v;                     // cp[3] weight
 
     RhVec3 pos;
     pos.x = w0 * cp[0].x + w1 * cp[1].x + w2 * cp[2].x + w3 * cp[3].x;

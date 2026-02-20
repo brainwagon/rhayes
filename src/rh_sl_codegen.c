@@ -1551,8 +1551,13 @@ static void emit_stmt(CodegenState* cg, const RhSLNode* node) {
         int axis_reg = 0;
         if (node->u.solar.axis) {
             axis_reg = emit_expr(cg, node->u.solar.axis);
-            /* If angle is present and nonzero, emit cone check */
-            if (node->u.solar.angle) {
+            /* If angle is present, emit cone check — but skip it when angle is a
+             * zero (or negative) literal.  solar(axis, 0) means "no cone
+             * restriction" per the RenderMan spec (illuminate all surfaces). */
+            int angle_is_zero = (node->u.solar.angle &&
+                                 node->u.solar.angle->node_type == SL_NODE_FLOAT_LIT &&
+                                 node->u.solar.angle->u.float_lit.value <= 0.0f);
+            if (node->u.solar.angle && !angle_is_zero) {
                 int angle_reg = emit_expr(cg, node->u.solar.angle);
                 /* L_dir = normalize(Ps - 0) -- direction from origin to Ps */
                 int tmp_ln = alloc_reg(cg, 3);

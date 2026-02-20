@@ -1,0 +1,37 @@
+# RenderMan RIB Output
+## Options
+Display "xwing_render.tiff" "file" "rgba"
+Format 1920 911 1.0
+PixelSamples 4 4
+Projection "perspective" "fov" [50]
+
+TransformBegin
+## Camera Transform
+# Synthesized LookAt (World -> Camera)
+# 1. Translate World to Origin (by -Eye)
+Translate 0.2699 -1.0340 1.8507
+
+# 2. Rotate World to align with Camera (Axis-Angle)
+Rotate 30.0781 -0.9603 -0.2700 0.0697
+
+## World
+WorldBegin
+    
+    # Lighting (Basic)
+    AttributeBegin
+        Translate 10 10 -10 # Dir Light 1 (Z flipped)
+        LightSource "distantlight" 1 "intensity" [1]
+    AttributeEnd
+
+    # Geometry
+    AttributeBegin
+        # Object Transform
+        Translate 0.5864 -3.1866 2.6933
+        Scale 0.6696 0.6696 0.6696
+        
+        # Geometry Reference
+        ReadArchive "star_wars_x-wing.rib"
+    AttributeEnd
+
+WorldEnd
+TransformEnd

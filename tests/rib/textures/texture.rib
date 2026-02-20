@@ -17,8 +17,8 @@ TransformBegin
         Patch "bilinear" "P" [
                 -5 0 -5
                  5 0 -5
-                 5 0  5
                 -5 0  5
+                 5 0  5
                 ]
     WorldEnd
 TransformEnd

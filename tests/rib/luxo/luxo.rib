@@ -1,0 +1,50 @@
+##RenderMan RIB-Structure 1.1
+version 3.03
+Format 512 512 1
+PixelSamples 4 4 
+Display "luxo.png" "file" "rgb"
+Projection "perspective" "fov" 30
+Clipping 0.01 1000
+
+TransformBegin
+    Sides 2
+    Translate 0 0 -15
+    WorldBegin
+
+        LightSource "distantlight" "intensity" 1 "from" [0 1 0]
+        Color [0.8 0.2 0.2]
+
+        Surface "luxo" "float Kd" [0.8] "float Ks" [0.8] "float roughness" [0.1]
+
+        AttributeBegin
+            Scale 1.2 1.2 1.2
+            Rotate 180 1 0 0
+            Sphere 1 -1 1 360
+        AttributeEnd
+
+        AttributeBegin
+            Translate -2.4 0 0 
+            Rotate 90 0 1 0
+            Scale 1.2 1.2 1.2
+            Sphere 1 -1 1 360
+        AttributeEnd
+
+        AttributeBegin
+            Translate 2.4 0 0 
+            Rotate -90 1 0 0
+            Scale 1.2 1.2 1.2
+            Sphere 1 -1 1 360
+        AttributeEnd
+
+
+        AttributeBegin
+            Surface "randomgrid"
+            Color [0.2 0.3 1.0]
+            Polygon "P" [-8 -1.2 8  
+                          8 -1.2 8  
+                          8 -1.2 -8  
+                          -8 -1.2 -8]
+
+        AttributeEnd
+    WorldEnd
+TransformEnd

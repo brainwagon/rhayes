@@ -297,18 +297,21 @@ static int eval_light_any(const RhSLLight* light, float* regs,
                           float* L_out, float* Cl_out,
                           RhShaderContext* ctx) {
     if (light->light_shader != NULL) {
-        /* Execute VM light shader */
+        /* Execute VM light shader.
+         * Pass the surface shader's transform_ctx so the light shader VM can
+         * transform coordinate-space-dependent values (e.g. solar axis). */
         RhShaderContext ctx_light;
         memset(&ctx_light, 0, sizeof(ctx_light));
-        /* Use camera-space P since light params (from/to) are in camera space */
         ctx_light.Ps.x = regs[R_P+0];
         ctx_light.Ps.y = regs[R_P+1];
         ctx_light.Ps.z = regs[R_P+2];
         ctx_light.N.x = regs[R_N+0];
         ctx_light.N.y = regs[R_N+1];
         ctx_light.N.z = regs[R_N+2];
-        if (ctx)
+        if (ctx) {
             ctx_light.P_world = ctx->P_world;
+            ctx_light.transform_ctx = ctx->transform_ctx;
+        }
         ctx_light.light_list = NULL;
         ctx_light.num_lights = 0;
 
@@ -833,12 +836,26 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
             /*
              * dst = instruction after block end (skip target)
              * src1 = register of axis direction (or 0 if no axis)
-             * Set L = -axis, fall through to body.
+             * Set L = axis (light travel direction = light-to-surface).
+             * Axis is world-space (from/to params are world-space); transform
+             * to camera space using the view matrix so that L_out is in the
+             * same space as N when callers negate it for N·L.
+             * Callers (eval_light_any, calculate_lights) negate L_out to get
+             * surface-to-light for N·L calculations.
              */
             if (src1 != 0) {
-                r[R_L+0] = -r[src1+0];
-                r[R_L+1] = -r[src1+1];
-                r[R_L+2] = -r[src1+2];
+                float ax = r[src1+0];
+                float ay = r[src1+1];
+                float az = r[src1+2];
+                if (state->transform_ctx) {
+                    RhVec3 aw = {ax, ay, az};
+                    RhVec3 ac = rh_mat4_mul_dir(
+                        state->transform_ctx->world_to_camera, aw);
+                    ax = ac.x; ay = ac.y; az = ac.z;
+                }
+                r[R_L+0] = ax;
+                r[R_L+1] = ay;
+                r[R_L+2] = az;
             }
             /* Fall through to body */
             break;

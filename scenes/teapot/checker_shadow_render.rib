@@ -1,0 +1,64 @@
+##RenderMan RIB-Structure 1.1
+# Render scene with shadow from the generated shadow map
+
+Format 1280 720 1
+PixelSamples 4 4
+Display "checker_shadow_render.png" "file" "rgb"
+Projection "perspective" "fov" 45
+
+TransformBegin
+# View camera - looking at scene from front, slightly above
+Rotate 20 1 0 0
+Translate 0 0 -12
+
+Sides 2
+WorldBegin
+
+# Spotlight from above-right with shadow map
+# Match the shadow map camera position
+LightSource "spotlight" "from" [4 12 -4] "to" [0.5 0 0] "intensity" 1 "coneangle" .174 "conedeltaangle" 0.01 
+
+# Small amount of ambient light
+LightSource "ambientlight" "intensity" 0.05
+
+# Gray teapot resting on ground (casts shadow)
+AttributeBegin
+    Surface "teapotplastic"
+    Color [0.6 0.6 0.6]
+    Translate 0 -1.5 0
+    Rotate -90 1 0 0
+    #Opacity [0.5 0.5 0.5]
+    Geometry "teapot"
+AttributeEnd
+
+# Checkerboard ground plane
+AttributeBegin
+    Surface "matte"
+    Translate 0 -1.5 0
+    Rotate -90 1 0 0
+
+    # Red squares
+    Color [0.8 0.2 0.2]
+    Polygon "P" [-4 -4 0  -2 -4 0  -2 -2 0  -4 -2 0]
+    Polygon "P" [0 -4 0  2 -4 0  2 -2 0  0 -2 0]
+    Polygon "P" [-2 -2 0  0 -2 0  0 0 0  -2 0 0]
+    Polygon "P" [2 -2 0  4 -2 0  4 0 0  2 0 0]
+    Polygon "P" [-4 0 0  -2 0 0  -2 2 0  -4 2 0]
+    Polygon "P" [0 0 0  2 0 0  2 2 0  0 2 0]
+    Polygon "P" [-2 2 0  0 2 0  0 4 0  -2 4 0]
+    Polygon "P" [2 2 0  4 2 0  4 4 0  2 4 0]
+
+    # Green squares
+    Color [0.2 0.8 0.2]
+    Polygon "P" [-2 -4 0  0 -4 0  0 -2 0  -2 -2 0]
+    Polygon "P" [2 -4 0  4 -4 0  4 -2 0  2 -2 0]
+    Polygon "P" [-4 -2 0  -2 -2 0  -2 0 0  -4 0 0]
+    Polygon "P" [0 -2 0  2 -2 0  2 0 0  0 0 0]
+    Polygon "P" [-2 0 0  0 0 0  0 2 0  -2 2 0]
+    Polygon "P" [2 0 0  4 0 0  4 2 0  2 2 0]
+    Polygon "P" [-4 2 0  -2 2 0  -2 4 0  -4 4 0]
+    Polygon "P" [0 2 0  2 2 0  2 4 0  0 4 0]
+AttributeEnd
+
+WorldEnd
+TransformEnd

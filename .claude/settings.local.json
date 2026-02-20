@@ -38,7 +38,15 @@
       "Bash(git push:*)",
       "Bash(RHAYES_SHADER_PATH=\"scenes/teapot:BUILTIN:.:shaders\" bin/render:*)",
       "Bash(RHAYES_SHADER_PATH=\".:shaders:BUILTIN\" bin/render:*)",
-      "Bash(tests/test_sl_codegen)"
+      "Bash(tests/test_sl_codegen)",
+      "Bash(RHAYES_SHADER_PATH=\".:/home/markv/rhayes/shaders:BUILTIN\" bin/render:*)",
+      "Bash(RHAYES_SHADER_PATH=\".:/home/markv/rhayes/shaders:BUILTIN\" make test:*)",
+      "Bash(python3:*)",
+      "Bash(__NEW_LINE_ec19e9aee2235f48__ python3 -c \":*)",
+      "Bash(__NEW_LINE_0b27431289971db0__ python3 -c \":*)",
+      "Bash(__NEW_LINE_189ff7332c86b3cb__ python3 -c \":*)",
+      "Bash(RHAYES_SHADER_PATH=\".:/home/markv/rhayes/shaders:BUILTIN\" RHAYES_XPT_LEVEL=debug bin/render:*)",
+      "Bash(RHAYES_SHADER_PATH=\".:/home/markv/rhayes/shaders:BUILTIN\" RHAYES_DEBUG=1 bin/render:*)"
     ]
   }
 }

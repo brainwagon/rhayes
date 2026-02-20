@@ -1,0 +1,18 @@
+Display "test_origin.png" "file" "rgb"
+Format 400 300 1
+PixelSamples 2 2
+
+Projection "perspective" "fov" [45.0]
+
+WorldBegin
+  LightSource "ambientlight" "intensity" [0.5]
+  LightSource "distantlight" "intensity" [0.8] "from" [0 0 1] "to" [0 0 0]
+
+  # Simple test sphere at origin, pushed back
+  AttributeBegin
+    Color [1 0 0]
+    Surface "constant"
+    Translate 0 0 -3
+    Sphere 1 -1 1 360
+  AttributeEnd
+WorldEnd
