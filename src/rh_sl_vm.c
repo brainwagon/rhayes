@@ -1035,11 +1035,51 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
             break;
         }
 
-        case OP_PRINTF:
-            if (src1 < (uint16_t)program->string_count) {
-                xpt_info("sl.vm", "%s", program->string_table[src1]);
+        case OP_PRINTF: {
+            const char* fmt = (src1 < (uint16_t)program->string_count)
+                              ? program->string_table[src1] : "";
+            int base = (int)dst;
+            int offset = 0;
+            char buf[1024];
+            int out = 0;
+            const char* p = fmt;
+            while (*p && out < (int)sizeof(buf) - 1) {
+                if (*p == '%' && *(p + 1)) {
+                    p++; /* skip '%' */
+                    char spec = *p++;
+                    if (spec == 'f' || spec == 'g' || spec == 'e' ||
+                        spec == 'i' || spec == 'd') {
+                        float val = r[base + offset++];
+                        if (spec == 'd' || spec == 'i')
+                            out += snprintf(buf + out, sizeof(buf) - (size_t)out,
+                                           "%d", (int)val);
+                        else
+                            out += snprintf(buf + out, sizeof(buf) - (size_t)out,
+                                           "%g", val);
+                    } else if (spec == 'p' || spec == 'c' ||
+                               spec == 'v' || spec == 'n') {
+                        float x = r[base + offset];
+                        float y = r[base + offset + 1];
+                        float z = r[base + offset + 2];
+                        offset += 3;
+                        out += snprintf(buf + out, sizeof(buf) - (size_t)out,
+                                        "%g %g %g", x, y, z);
+                    } else if (spec == '%') {
+                        if (out < (int)sizeof(buf) - 1) buf[out++] = '%';
+                    } else {
+                        if (out < (int)sizeof(buf) - 2) {
+                            buf[out++] = '%';
+                            buf[out++] = spec;
+                        }
+                    }
+                } else {
+                    buf[out++] = *p++;
+                }
             }
+            buf[out] = '\0';
+            fprintf(stderr, "%s", buf);
             break;
+        }
 
         case OP_HALT:
             return;

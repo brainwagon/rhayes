@@ -933,11 +933,35 @@ static int emit_builtin_call(CodegenState* cg, const RhSLNode* node) {
 
     /* --- printf(format, ...) --- */
     if (strcmp(name, "printf") == 0 && nargs >= 1) {
-        const RhSLNode* str_arg = node->u.call.args;
-        if (str_arg && str_arg->node_type == SL_NODE_STRING_LIT) {
-            int str_idx = add_string(cg, str_arg->u.string_lit.value);
-            emit(cg, RH_SL_INSTR(OP_PRINTF, 0, (uint16_t)str_idx, 0));
+        /* arg_regs[0] = string table index (emit_expr returns str index for string lits) */
+        int str_idx = arg_regs[0];
+
+        /* Count total registers needed for value args (skip format string) */
+        int num_val_args = nargs - 1;
+        int total_regs = 0;
+        const RhSLNode* va = node->u.call.args;
+        if (va) va = va->next; /* skip format string */
+        for (const RhSLNode* a = va; a; a = a->next)
+            total_regs += type_reg_count(a->resolved_type);
+
+        /* Pack value args into a contiguous register block */
+        int base = 0;
+        if (total_regs > 0) {
+            base = alloc_reg(cg, total_regs);
+            int pack = base;
+            int ai = 1; /* index into arg_regs[], skip format string at [0] */
+            for (const RhSLNode* a = va; a && ai < 16; a = a->next, ai++) {
+                int nc = type_reg_count(a->resolved_type);
+                if (nc == 1)
+                    emit(cg, RH_SL_INSTR(OP_FMOV, (uint16_t)pack, (uint16_t)arg_regs[ai], 0));
+                else
+                    emit(cg, RH_SL_INSTR(OP_VMOV, (uint16_t)pack, (uint16_t)arg_regs[ai], 0));
+                pack += nc;
+            }
         }
+
+        emit(cg, RH_SL_INSTR(OP_PRINTF, (uint16_t)base,
+                              (uint16_t)str_idx, (uint16_t)num_val_args));
         return 0; /* void */
     }
 

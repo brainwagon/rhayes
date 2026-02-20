@@ -2245,6 +2245,65 @@ static void test_texture_4point(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Tests: printf builtin                                              */
+/* ------------------------------------------------------------------ */
+
+static void test_printf_no_args(void) {
+    /* printf with no value args should compile and run without crashing */
+    const char* src =
+        "surface pf_noargs() {\n"
+        "    printf(\"hello\\n\");\n"
+        "    Ci = color(1, 0, 0);\n"
+        "    Oi = Os;\n"
+        "}";
+    RhShaderContext ctx;
+    init_ctx(&ctx);
+    if (run_shader(src, &ctx, NULL, 0) != 0) {
+        tests_run++; tests_failed++;
+        printf("  FAIL [printf_no_args] compilation failed\n");
+        return;
+    }
+    check_color("printf_no_args", "Ci", ctx.Ci, (RhColor){1, 0, 0}, TOL);
+}
+
+static void test_printf_float_args(void) {
+    /* printf with a float argument; verify Ci is still computed correctly */
+    const char* src =
+        "surface pf_float() {\n"
+        "    float val = 0.5;\n"
+        "    printf(\"val=%f\\n\", val);\n"
+        "    Ci = color(val, 0, 0);\n"
+        "    Oi = Os;\n"
+        "}";
+    RhShaderContext ctx;
+    init_ctx(&ctx);
+    if (run_shader(src, &ctx, NULL, 0) != 0) {
+        tests_run++; tests_failed++;
+        printf("  FAIL [printf_float_args] compilation failed\n");
+        return;
+    }
+    check_color("printf_float_args", "Ci", ctx.Ci, (RhColor){0.5f, 0, 0}, TOL);
+}
+
+static void test_printf_tuple_arg(void) {
+    /* printf with a tuple (normal) argument; verify Ci is correct */
+    const char* src =
+        "surface pf_tuple() {\n"
+        "    printf(\"N=%n\\n\", N);\n"
+        "    Ci = Cs;\n"
+        "    Oi = Os;\n"
+        "}";
+    RhShaderContext ctx;
+    init_ctx(&ctx);
+    if (run_shader(src, &ctx, NULL, 0) != 0) {
+        tests_run++; tests_failed++;
+        printf("  FAIL [printf_tuple_arg] compilation failed\n");
+        return;
+    }
+    check_color("printf_tuple_arg", "Ci", ctx.Ci, (RhColor){0.8f, 0.2f, 0.1f}, TOL);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -2354,6 +2413,11 @@ int main(void) {
     test_texture_width();
     test_texture_sblur_tblur();
     test_texture_4point();
+
+    /* printf builtin */
+    test_printf_no_args();
+    test_printf_float_args();
+    test_printf_tuple_arg();
 
     printf("\n=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) printf(", %d FAILED", tests_failed);
