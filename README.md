@@ -299,6 +299,8 @@ Motion blur with jittered sampling remains computationally expensive for fast-mo
 - **Bucket Assignment Bug**: Fixed resolution-dependent rendering failures where primitives would render at some resolutions but not others. The screen-space bounding box calculation was incorrectly initialized, causing off-screen detection to depend on image dimensions.
 - **Far Clipping Plane**: Changed default far clipping plane from 100 to effectively infinite (1e30), allowing scenes with distant geometry to render correctly.
 - **STL Converter Camera Order**: Fixed `stl2rib.py` camera transform order. RenderMan transforms accumulate via post-multiplication, so for an isometric view the correct order is: Rotate (aim), Rotate (tilt), Translate (back away).
+- **Shader Space Transform**: `transform("shader", ...)` now correctly uses the CTM captured at shader-bind time instead of treating shader space as camera space. This enables proper pattern placement for shaders bound inside transformed scopes.
+- **TransformBegin/End**: Refactored to use a dedicated transform-only stack instead of cloning the full attribute state, matching the RenderMan specification where `TransformBegin`/`End` saves and restores only the current transformation matrix.
 
 ## Work in Progress
 

@@ -19,6 +19,7 @@ TransformBegin
         AttributeBegin
             Scale 1.2 1.2 1.2
             Rotate 180 1 0 0
+            Rotate 36 0 0 1
             Sphere 1 -1 1 360
         AttributeEnd
 
@@ -26,6 +27,7 @@ TransformBegin
             Translate -2.4 0 0 
             Rotate 90 0 1 0
             Scale 1.2 1.2 1.2
+            Rotate 36 0 0 1
             Sphere 1 -1 1 360
         AttributeEnd
 
@@ -33,12 +35,13 @@ TransformBegin
             Translate 2.4 0 0 
             Rotate -90 1 0 0
             Scale 1.2 1.2 1.2
+            Rotate 36 0 0 1
             Sphere 1 -1 1 360
         AttributeEnd
 
 
         AttributeBegin
-            Surface "randomgrid"
+            Surface "matte"
             Color [0.2 0.3 1.0]
             Polygon "P" [-8 -1.2 8  
                           8 -1.2 8  

@@ -11,6 +11,7 @@ typedef struct {
     RhMat4 camera_to_world;     // inverse(view_matrix)
     RhMat4 object_to_world;     // item->transform (model matrix)
     RhMat4 world_to_object;     // inverse(item->transform)
+    RhMat4 shader_to_world;     // CTM when shader was bound (for "shader" space transforms)
     RhMat4 camera_to_screen;    // projection matrix
     const void* named_systems;  // RhNamedCoordSys* (opaque to avoid circular include)
     int num_named_systems;

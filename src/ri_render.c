@@ -122,6 +122,7 @@ RhRenderItem* ri_render_item_create(const RhPrimitive* p, const RhMat4* transfor
     item->opacity = ri_curr()->opacity;
     item->shader = ri_curr()->current_surface_shader;
     item->shader_params = ri_curr()->current_shader_params;
+    item->shader_to_world = ri_curr()->current_shader_to_world;
     item->atmosphere_shader = ri_curr()->current_atmosphere_shader;
     item->atmosphere_params = ri_curr()->current_atmosphere_params;
     item->shading_rate = ri_curr()->shading_rate;
@@ -1360,6 +1361,7 @@ static void ri_process_item_recursive(RhRenderItem* item, int depth, RhMicropoly
         xform_ctx.camera_to_world = rh_mat4_inverse(view);
         xform_ctx.object_to_world = model;
         xform_ctx.world_to_object = model_inv;
+        xform_ctx.shader_to_world = item->shader_to_world;
         xform_ctx.camera_to_screen = proj;
         xform_ctx.named_systems = ctx->named_coord_sys;
         xform_ctx.num_named_systems = ctx->num_named_coord_sys;

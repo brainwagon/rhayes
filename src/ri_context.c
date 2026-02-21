@@ -44,6 +44,7 @@ void RiBegin(RtToken name) {
 
     // Default State
     g_ctx->stack_ptr = 0;
+    g_ctx->transform_stack_ptr = -1;
     g_ctx->stack[0].transform = rh_mat4_identity();
     g_ctx->stack[0].transform_t1 = rh_mat4_identity();
     g_ctx->stack[0].has_motion = false;
@@ -67,6 +68,7 @@ void RiBegin(RtToken name) {
     g_ctx->stack[0].shading_rate = 1.0f; // Default ShadingRate
     g_ctx->stack[0].displace_bound = 0.0f;
     memcpy(g_ctx->stack[0].displace_coordsys, "object", 7);
+    g_ctx->stack[0].current_shader_to_world = rh_mat4_identity();
 
     // Default Orientation and Sides
     g_ctx->stack[0].orientation_lh = true;        // Left-handed by default (RenderMan convention)

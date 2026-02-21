@@ -1237,6 +1237,8 @@ void RiSurfaceV(RtToken name, RtToken* tokens, RtPointer* values, int count) {
 
     if (!sctx.found) {
         xpt_warn("ri.primitive", "shader '%s' not found", name);
+    } else {
+        ri_curr()->current_shader_to_world = ri_curr()->transform;
     }
 }
 

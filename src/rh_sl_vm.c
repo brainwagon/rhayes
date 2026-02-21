@@ -884,9 +884,13 @@ void rh_sl_vm_execute(const RhSLProgram* program, RhSLExecState* state) {
                                 ? program->string_table[src2] : "current";
             /* Resolve current-to-target matrix */
             RhMat4 mat = rh_mat4_identity();
-            if (strcmp(space, "camera") == 0 || strcmp(space, "current") == 0
-                || strcmp(space, "shader") == 0) {
+            if (strcmp(space, "camera") == 0 || strcmp(space, "current") == 0) {
                 /* identity — already in camera space */
+            } else if (strcmp(space, "shader") == 0) {
+                /* shader space = CTM at shader-bind time
+                 * camera -> world -> shader: inv(shader_to_world) * camera_to_world */
+                RhMat4 world_to_shader = rh_mat4_inverse(tc->shader_to_world);
+                mat = rh_mat4_mul(world_to_shader, tc->camera_to_world);
             } else if (strcmp(space, "world") == 0) {
                 mat = tc->camera_to_world;
             } else if (strcmp(space, "object") == 0) {

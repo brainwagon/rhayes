@@ -33,6 +33,14 @@
 #define MAX_IMPL_ATTR_NAME 64
 #define MAX_NAMED_COORD_SYS 32
 
+// --- Transform Frame (for separate transform stack) ---
+
+typedef struct {
+    RhMat4 transform;
+    RhMat4 transform_t1;
+    bool has_motion;
+} RhTransformFrame;
+
 // --- Named Coordinate System ---
 
 typedef struct RhNamedCoordSys {
@@ -92,6 +100,7 @@ typedef struct {
     float shading_rate;  // Controls splitting granularity (default 1.0)
     float displace_bound;         /* sphere radius in displace_coordsys (default 0) */
     char  displace_coordsys[64];  /* coordinate system name (default "object") */
+    RhMat4 current_shader_to_world;  /* CTM captured when current surface shader was bound */
 
     // Orientation and sides
     bool orientation_lh;         // false = right-handed (default), true = left-handed
@@ -139,6 +148,7 @@ typedef struct {
     bool orientation_flipped;    // Combined orientation state at primitive creation
     int sides;                   // Sides value captured at primitive creation
     bool is_matte;               // True if this is a hold-out matte object
+    RhMat4 shader_to_world;      // CTM at shader-bind time (for "shader" space transforms)
 } RhRenderItem;
 
 // --- Micropolygon Types ---
@@ -360,6 +370,10 @@ typedef struct {
     // State Stack
     RiAttributeState stack[MAX_STACK_DEPTH];
     int stack_ptr;
+
+    // Separate transform-only stack (for RiTransformBegin/End)
+    RhTransformFrame transform_stack[MAX_STACK_DEPTH];
+    int transform_stack_ptr;  /* -1 = empty */
 
     // Rendering Context
     RhRasterizer* raster;

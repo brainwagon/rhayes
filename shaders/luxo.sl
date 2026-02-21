@@ -5,7 +5,7 @@ surface luxo(float Ka = 1; float Kd = 0.5; float Ks = 0.5;
     color blue = color(0.03, 0.3, 1) ;
     color yellow = color(1, 1, 0) ;
     color red = color(1, 0, 0) ;
-    point Pp = transform("shader", "object", P) ;
+    point Pp = transform("current", "object", P) ;
     float x = xcomp(Pp) ;
     float y = ycomp(Pp) ;
     float z = zcomp(Pp) ;

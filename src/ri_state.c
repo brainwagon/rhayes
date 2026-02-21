@@ -11,27 +11,20 @@
 
 void RiTransformBegin(void) {
     RiContextData* ctx = ri_get_ctx();
-    if (!ctx || ctx->stack_ptr >= MAX_STACK_DEPTH - 1) return;
-    int p = ctx->stack_ptr;
-    ctx->stack_ptr++;
-    // Copy entire state (including shaders) for simplicity
-    // In strict RenderMan, TransformBegin only saves CTM, but we need
-    // shaders to be available for geometry created in this scope
-    ctx->stack[ctx->stack_ptr] = ctx->stack[p];
+    if (!ctx || ctx->transform_stack_ptr >= MAX_STACK_DEPTH - 1) return;
+    ctx->transform_stack_ptr++;
+    ctx->transform_stack[ctx->transform_stack_ptr].transform    = ri_curr()->transform;
+    ctx->transform_stack[ctx->transform_stack_ptr].transform_t1 = ri_curr()->transform_t1;
+    ctx->transform_stack[ctx->transform_stack_ptr].has_motion   = ri_curr()->has_motion;
 }
 
 void RiTransformEnd(void) {
     RiContextData* ctx = ri_get_ctx();
-    if (!ctx || ctx->stack_ptr <= 0) return;
-    // If strict compliance: only restore transformation.
-    // RhMat4 t = ctx->stack[ctx->stack_ptr - 1].transform; // Previous transform
-
-    // Restore transform (pop logic usually handles this just by decr pointer)
-    // But we need to ensure we didn't accidentally pop attributes if this was TransformEnd.
-    // Standard says TransformBegin/End saves "Current Transformation".
-    // AttributeBegin/End saves everything.
-    // To do this right with one stack, we just use AttributeBegin/End logic for now.
-    ctx->stack_ptr--;
+    if (!ctx || ctx->transform_stack_ptr < 0) return;
+    ri_curr()->transform    = ctx->transform_stack[ctx->transform_stack_ptr].transform;
+    ri_curr()->transform_t1 = ctx->transform_stack[ctx->transform_stack_ptr].transform_t1;
+    ri_curr()->has_motion   = ctx->transform_stack[ctx->transform_stack_ptr].has_motion;
+    ctx->transform_stack_ptr--;
 }
 
 void RiAttributeBegin(void) {
